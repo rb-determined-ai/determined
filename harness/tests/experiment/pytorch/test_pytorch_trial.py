@@ -398,6 +398,43 @@ class TestPyTorchTrial:
         )
         controller.run()
 
+    def test_custom_reducers(self) -> None:
+        def make_workloads() -> workload.Stream:
+            trainer = utils.TrainAndValidate()
+
+            yield from trainer.send(steps=3, validation_freq=3, scheduling_unit=10)
+            training_metrics = trainer.get_avg_training_metrics()
+            _, validation_metrics = trainer.result()
+
+            batch_size = self.hparams["global_batch_size"]
+
+            for i, metrics in enumerate(training_metrics):
+                expect = pytorch_onevar_model.TriangleLabelSum.expect(
+                    batch_size, 10 * i, 10 * (i + 1)
+                )
+                assert "cls_reducer" in metrics
+                assert metrics["cls_reducer"] == expect
+                assert "fn_reducer" in metrics
+                assert metrics["fn_reducer"] == expect
+
+            for metrics in validation_metrics:
+                num_batches = len(pytorch_onevar_model.OnesDataset()) // batch_size
+                expect = pytorch_onevar_model.TriangleLabelSum.expect(batch_size, 0, num_batches)
+                assert "cls_reducer" in metrics
+                assert metrics["cls_reducer"] == expect
+                assert "fn_reducer" in metrics
+                assert metrics["fn_reducer"] == expect
+
+            yield workload.terminate_workload(), [], workload.ignore_workload_response
+
+        controller = utils.make_trial_controller_from_trial_implementation(
+            trial_class=pytorch_onevar_model.OneVarTrial,
+            hparams=self.hparams,
+            workloads=make_workloads(),
+            trial_seed=self.trial_seed,
+        )
+        controller.run()
+
 
 def test_create_trial_instance() -> None:
     utils.create_trial_instance(pytorch_xor_model.XORTrial)
