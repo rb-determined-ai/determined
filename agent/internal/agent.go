@@ -382,6 +382,8 @@ func (a *agent) setup(ctx *actor.Context) error {
 		Version: a.Version,
 		Devices: a.Devices,
 		Label:   a.Label,
+
+		AdvertiseAddress: a.AdvertiseAddress,
 	}}})
 	return nil
 }

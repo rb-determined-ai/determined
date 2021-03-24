@@ -41,6 +41,8 @@ type AgentStarted struct {
 	Version string
 	Label   string
 	Devices []device.Device
+
+	AdvertiseAddress string
 }
 
 // ContainerStateChanged notifies the master that the agent transitioned the container state.

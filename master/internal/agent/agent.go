@@ -24,6 +24,7 @@ import (
 
 type agent struct {
 	address          string
+	advertiseAddress string
 	resourcePool     *actor.Ref
 	socket           *actor.Ref
 	slots            *actor.Ref
@@ -150,6 +151,7 @@ func (a *agent) handleIncomingWSMessage(ctx *actor.Context, msg aproto.MasterMes
 		ctx.Tell(a.resourcePool, sproto.AddAgent{Agent: ctx.Self(), Label: msg.AgentStarted.Label})
 		ctx.Tell(a.slots, *msg.AgentStarted)
 		a.label = msg.AgentStarted.Label
+		a.advertiseAddress = msg.AgentStarted.AdvertiseAddress
 	case msg.ContainerStateChanged != nil:
 		a.containerStateChanged(ctx, *msg.ContainerStateChanged)
 	case msg.ContainerLog != nil:
@@ -176,7 +178,11 @@ func (a *agent) containerStateChanged(ctx *actor.Context, sc aproto.ContainerSta
 	switch sc.Container.State {
 	case container.Running:
 		if sc.ContainerStarted.ProxyAddress == "" {
-			sc.ContainerStarted.ProxyAddress = a.address
+			if a.advertiseAddress != "" {
+				sc.ContainerStarted.ProxyAddress = a.advertiseAddress
+			} else {
+				sc.ContainerStarted.ProxyAddress = a.address
+			}
 		}
 		rsc.ContainerStarted = &sproto.TaskContainerStarted{
 			Addresses: sc.ContainerStarted.Addresses(),

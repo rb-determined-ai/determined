@@ -42,6 +42,8 @@ type Options struct {
 	Security SecurityOptions `json:"security"`
 
 	Fluent FluentOptions `json:"fluent"`
+
+	AdvertiseAddress string `json:"advertise_address"`
 }
 
 // Validate validates the state of the Options struct.
