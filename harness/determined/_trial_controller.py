@@ -3,7 +3,7 @@ import logging
 from typing import Any
 
 import determined as det
-from determined import horovod, profiler, workload
+from determined import horovod, profiler
 from determined._rendezvous_info import RendezvousInfo
 from determined.common import check
 from determined.horovod import hvd
@@ -11,25 +11,19 @@ from determined.horovod import hvd
 
 class TrialController(metaclass=abc.ABCMeta):
     """
-    Abstract base class for TrialControllers.
-
-    A TrialController is the lowest Determined-owned layer of the harness. It consumes Workloads
-    from higher layers of the harness and applies framework-specific logic to execute the
-    workloads.  Framework-specific details like tf.Session objects or keras.Model objects are
-    handled at this level.
+    TrialController is the legacy class that represented the Determined-owned logic to interact with
+    a user-owned Trial class.
     """
 
     def __init__(
         self,
         context: Any,
         env: det.EnvContext,
-        workloads: workload.Stream,
         rendezvous_info: RendezvousInfo,
         hvd_config: horovod.HorovodContext,
     ) -> None:
         self.context = context
         self.env = env
-        self.workloads = workloads
         self.rendezvous_info = rendezvous_info
         self.hvd_config = hvd_config
 
@@ -72,7 +66,6 @@ class TrialController(metaclass=abc.ABCMeta):
         trial_inst: "det.Trial",
         context: det.TrialContext,
         env: det.EnvContext,
-        workloads: workload.Stream,
         rendezvous_info: RendezvousInfo,
         hvd_config: horovod.HorovodContext,
     ) -> "TrialController":
