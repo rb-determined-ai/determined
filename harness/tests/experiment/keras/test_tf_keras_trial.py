@@ -94,8 +94,6 @@ class TestKerasTrial:
                 assert "categorical_accuracy" in metrics
                 assert "predictions" in metrics
 
-            yield workload.terminate_workload(), workload.ignore_workload_response
-
         controller = utils.make_trial_controller_from_trial_implementation(
             tf_keras_xor_model.XORTrialWithTrainingMetrics,
             self.hparams,
@@ -143,8 +141,6 @@ class TestKerasTrial:
                     # last_batch is unused, but can't be 0.
                     last_batch = 1
                     break
-
-            yield workload.terminate_workload(), workload.ignore_workload_response
 
         hparams = {"learning_rate": 0.001, "global_batch_size": 3, "dataset_range": 10}
         exp_config = utils.make_default_exp_config(
@@ -199,8 +195,6 @@ class TestKerasTrial:
             epsilon = 0.0001
             assert abs(validation_metrics[-1]["val_categorical_error"]) < epsilon
 
-            yield workload.terminate_workload(), workload.ignore_workload_response
-
         controller = xor_trial_controller(
             self.hparams, make_workloads(), scheduling_unit=100, trial_seed=self.trial_seed
         )
@@ -227,8 +221,6 @@ class TestKerasTrial:
             latest_checkpoint = interceptor.metrics_result()["metrics"].__json__()
             last_batch = trainer.get_total_batches()
 
-            yield workload.terminate_workload(), workload.ignore_workload_response
-
         controller = xor_trial_controller(
             self.hparams,
             make_workloads_1(),
@@ -248,8 +240,6 @@ class TestKerasTrial:
 
             new_loss = metrics["metrics"]["validation_metrics"]["val_loss"]
             assert new_loss == pytest.approx(old_loss)
-
-            yield workload.terminate_workload(), workload.ignore_workload_response
 
         controller = xor_trial_controller(
             self.hparams,
@@ -295,7 +285,6 @@ class TestKerasTrial:
             trainer = utils.TrainAndValidate(request_stop_step_id=1)
             yield from trainer.send(steps=100, validation_freq=2, scheduling_unit=5)
             tm, vm = trainer.result()
-            yield workload.terminate_workload(), workload.ignore_workload_response
 
         hparams = dict(self.hparams)
         hparams["stop_early"] = True
@@ -314,8 +303,6 @@ class TestKerasTrial:
 
             yield from trainer.send(steps=15, validation_freq=4, scheduling_unit=5)
             training_metrics, validation_metrics = trainer.result()
-
-            yield workload.terminate_workload(), workload.ignore_workload_response
 
         hparams = {
             "learning_rate": 0.001,
