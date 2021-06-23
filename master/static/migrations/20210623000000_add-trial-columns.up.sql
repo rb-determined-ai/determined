@@ -1,6 +1,8 @@
 DROP TABLE public.trial_snapshots;
 
-ALTER TABLE public.trials ADD COLUMN restarts integer NOT NULL DEFAULT 0;
+ALTER TABLE public.trials
+    ADD COLUMN restarts integer NOT NULL DEFAULT 0,
+    ADD COLUMN runner_state text NOT NULL DEFAULT 'UNSPECIFIED';
 
 DROP TABLE public.runs;
 
@@ -22,12 +24,4 @@ CREATE TABLE public.task_runs (
     task_type task_type NOT NULL,
     task_type_fk_id integer NOT NULL,
     CONSTRAINT task_runs_run_id_trial_id_unique UNIQUE (task_type, task_type_fk_id, run_id)
-);
-
-CREATE TABLE public.trial_runner_metadata (
-    id SERIAL,
-    trial_id int,
-    state text,
-    CONSTRAINT trial_runner_metadata_trial_id_unique UNIQUE (trial_id),
-    CONSTRAINT trial_runner_metadata_trial_id_fk FOREIGN KEY (trial_id) REFERENCES public.trials(id)
 );

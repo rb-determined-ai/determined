@@ -1221,17 +1221,18 @@ WHERE id = :id`, setClause(toUpdate)), trial)
 }
 
 // UpdateTrialRunnerState updates a trial runner's state.
+// TODO(XXX): pepper this call all over trial.go once it won't just lead to oodles of conflicts.
 func (db *PgDB) UpdateTrialRunnerState(id int, state string) error {
 	return db.UpdateTrialRunnerMetadata(id, &trialv1.TrialRunnerMetadata{State: state})
 }
 
+
 // UpdateTrialRunnerMetadata updates a trial's metadata about its runner.
 func (db *PgDB) UpdateTrialRunnerMetadata(id int, md *trialv1.TrialRunnerMetadata) error {
 	if _, err := db.sql.Exec(`
-INSERT INTO trial_runner_metadata (trial_id, state)
-VALUES ($1, $2)
-ON CONFLICT (trial_id)
-DO UPDATE SET state = EXCLUDED.state`, id, md.State); err != nil {
+UPDATE trials
+SET runner_state = $2
+WHERE id = $1`, id, md.State); err != nil {
 		return errors.Wrap(err, "saving trial runner state")
 	}
 	return nil
