@@ -312,11 +312,11 @@ class PyTorchTrialController(det.LoopTrialController):
             self.prof.update_batch_idx(batch_idx)
             with self.prof.record_timing("dataloader_next"):
                 batch = next(self.training_iterator)
-            batch_inputs = pytorch.data_length(batch)
+            batch_inputs += self.trial._records_in_batch(batch)
             num_inputs += batch_inputs
 
             with self.prof.record_timing("to_device"):
-                batch = self.context.to_device(batch)
+                batch = self.trial._batch_to_device(batch, self.context)
 
             self.context._current_batch_idx = batch_idx
             if self.context.is_epoch_start():
@@ -969,6 +969,14 @@ class PyTorchTrial(det.Trial):
             data_loader (torch.utils.data.DataLoader): data loader for evaluating.
         """
         pass
+
+    def _records_in_batch(self, batch):
+        """Count the number of records batch.  Only needs overriding for unusal datasets."""
+        return pytorch.data_length(batch)
+
+    def _batch_to_device(self, batch, context):
+        """Move a batch to the model.  Only needs overriding for unusal datasets."""
+        return context.to_device(batch)
 
 
 def reset_parameters(model: torch.nn.Module) -> None:
