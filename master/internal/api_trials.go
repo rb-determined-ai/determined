@@ -299,13 +299,10 @@ func (a *apiServer) KillTrial(
 		return nil, status.Errorf(codes.NotFound, "trial %d not found", req.Id)
 	}
 
-	resp := apiv1.KillTrialResponse{}
-	addr := actor.Addr("trials", req.Id).String()
-	err = a.actorRequest(addr, req, &resp)
-	if status.Code(err) == codes.NotFound {
-		return &apiv1.KillTrialResponse{}, nil
+	if err = a.ask(actor.Addr("trials", req.Id), model.StoppingCanceledState, nil); err != nil {
+		return nil, err
 	}
-	return &resp, err
+	return &apiv1.KillTrialResponse{}, nil
 }
 
 func (a *apiServer) GetExperimentTrials(
@@ -560,7 +557,7 @@ func (a *apiServer) TrialPreemptionSignal(
 
 	id := uuid.New()
 	var w preemptionWatcher
-	if err := a.askAtDefaultSystem(trial, watchPreemption{id: id}, &w); err != nil {
+	if err := a.ask(trial, watchPreemption{id: id}, &w); err != nil {
 		return nil, err
 	}
 	defer a.m.system.TellAt(trial, unwatchPreemption{id: id})
@@ -573,6 +570,20 @@ func (a *apiServer) TrialPreemptionSignal(
 	}
 }
 
+func (a *apiServer) AckTrialPreemptionSignal(
+	_ context.Context, req *apiv1.AckTrialPreemptionSignalRequest,
+) (*apiv1.AckTrialPreemptionSignalResponse, error) {
+	trial, err := a.trialActorFromID(int(req.TrialId))
+	if err != nil {
+		return nil, err
+	}
+
+	if err := a.ask(trial, ackPreemption{runID: int(req.TaskRunId)}, nil); err != nil {
+		return nil, err
+	}
+	return &apiv1.AckTrialPreemptionSignalResponse{}, nil
+}
+
 func (a *apiServer) GetCurrentTrialSearcherOperation(
 	_ context.Context, req *apiv1.GetCurrentTrialSearcherOperationRequest,
 ) (*apiv1.GetCurrentTrialSearcherOperationResponse, error) {
@@ -581,8 +592,8 @@ func (a *apiServer) GetCurrentTrialSearcherOperation(
 		return nil, err
 	}
 
-	var resp searcher.ValidateAfter
-	if err := a.askAtDefaultSystem(exp, trialGetCurrentOperation{
+	var resp TrialSearcherState
+	if err := a.ask(exp, trialGetSearcherState{
 		trialID: int(req.TrialId),
 	}, &resp); err != nil {
 		return nil, err
@@ -591,9 +602,10 @@ func (a *apiServer) GetCurrentTrialSearcherOperation(
 	return &apiv1.GetCurrentTrialSearcherOperationResponse{
 		Op: &experimentv1.SearcherOperation{
 			Union: &experimentv1.SearcherOperation_ValidateAfter{
-				ValidateAfter: resp.ToProto(),
+				ValidateAfter: resp.Op.ToProto(),
 			},
 		},
+		Complete: resp.Complete,
 	}, nil
 }
 
@@ -609,17 +621,10 @@ func (a *apiServer) CompleteTrialSearcherValidation(
 	}
 	exp := actor.Addr("experiments", eID)
 
-	// TODO(DET-5210): Sending a trial snapshot along forces an experiment snapshot,
-	// but with a nil snapshot it won't save the trial snapshot. At the end of push
-	// arch, we should just remove trial snapshots entirely (they should snapshotted
-	// but separately, not through/with experiments, since it's really just run id and restarts).
-	if err = a.askAtDefaultSystem(exp, trialCompleteOperation{
-		metric: req.CompletedOperation.SearcherMetric,
-		op:     searcher.ValidateAfterFromProto(rID, req.CompletedOperation.Op),
-		trialSnapshot: trialSnapshot{
-			trialID:   int(req.TrialId),
-			requestID: rID,
-		},
+	if err = a.ask(exp, trialCompleteOperation{
+		trialID: int(req.TrialId),
+		metric:  req.CompletedOperation.SearcherMetric,
+		op:      searcher.ValidateAfterFromProto(rID, req.CompletedOperation.Op),
 	}, nil); err != nil {
 		return nil, err
 	}
@@ -629,7 +634,7 @@ func (a *apiServer) CompleteTrialSearcherValidation(
 func (a *apiServer) ReportTrialSearcherEarlyExit(
 	_ context.Context, req *apiv1.ReportTrialSearcherEarlyExitRequest,
 ) (*apiv1.ReportTrialSearcherEarlyExitResponse, error) {
-	eID, rID, err := a.m.db.TrialExperimentAndRequestID(int(req.TrialId))
+	eID, _, err := a.m.db.TrialExperimentAndRequestID(int(req.TrialId))
 	switch {
 	case errors.Is(err, db.ErrNotFound):
 		return nil, trialNotFound
@@ -638,13 +643,9 @@ func (a *apiServer) ReportTrialSearcherEarlyExit(
 	}
 	exp := actor.Addr("experiments", eID)
 
-	// TODO(DET-5210): Ditto comment in apiServer.ReportTrialSearcherValidation.
-	if err = a.askAtDefaultSystem(exp, trialReportEarlyExit{
-		reason: workload.ExitedReasonFromProto(req.EarlyExit.Reason),
-		trialSnapshot: trialSnapshot{
-			trialID:   int(req.TrialId),
-			requestID: rID,
-		},
+	if err = a.ask(exp, trialReportEarlyExit{
+		trialID: int(req.TrialId),
+		reason:  workload.ExitedReasonFromProto(req.EarlyExit.Reason),
 	}, nil); err != nil {
 		return nil, err
 	}
@@ -663,7 +664,7 @@ func (a *apiServer) ReportTrialProgress(
 	}
 	exp := actor.Addr("experiments", eID)
 
-	if err = a.askAtDefaultSystem(exp, trialReportProgress{
+	if err = a.ask(exp, trialReportProgress{
 		requestID: rID,
 		progress:  model.PartialUnits(req.Progress),
 	}, nil); err != nil {
@@ -717,12 +718,12 @@ func (a *apiServer) GetTrialRendezvousInfo(
 	}
 
 	var w rendezvousWatcher
-	if err = a.askAtDefaultSystem(trial, watchRendezvousInfo{
-		containerID: cproto.ID(req.ContainerId),
+	if err = a.ask(trial, watchRendezvousInfo{
+		id: cproto.ID(req.ContainerId),
 	}, &w); err != nil {
 		return nil, err
 	}
-	defer a.m.system.TellAt(trial, unwatchRendezvousInfo{containerID: cproto.ID(req.ContainerId)})
+	defer a.m.system.TellAt(trial, unwatchRendezvousInfo{id: cproto.ID(req.ContainerId)})
 
 	select {
 	case rsp := <-w.C:

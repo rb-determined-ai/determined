@@ -517,6 +517,18 @@ service Determined {
       tags: "Internal"
     };
   }
+  // Acknowledge the receipt of a signal to stop the current running task early.
+  // This is used indicate and exit 0 isn't final. Used for HP search directed
+  // early stops and preemption signals (not necessarily just scheduler preemption).
+  rpc AckTrialPreemptionSignal(AckTrialPreemptionSignalRequest)
+      returns (AckTrialPreemptionSignalResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/trials/{trial_id}/signals/ack_preemption"
+    };
+    option (grpc.gateway.protoc_gen_swagger.options.openapiv2_operation) = {
+      tags: "Internal"
+    };
+  }
   // Get the current searcher operation.
   rpc GetCurrentTrialSearcherOperation(GetCurrentTrialSearcherOperationRequest)
       returns (GetCurrentTrialSearcherOperationResponse) {

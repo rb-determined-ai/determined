@@ -286,6 +286,18 @@ message TrialPreemptionSignalResponse {
   // True if signaling preempt, otherwise just a synchronization marker.
   bool preempt = 1;
 }
+// Acknowledge the receipt of some stop signal.
+message AckTrialPreemptionSignalRequest {
+  option (grpc.gateway.protoc_gen_swagger.options.openapiv2_schema) = {
+    json_schema: { required: [ "trial_id" ] }
+  };
+  // The requested trial's id.
+  int32 trial_id = 1;
+  // The run that is acknowledging the request.
+  int32 task_run_id = 2;
+}
+// Response to AckTrialPreemptionSignalRequest.
+message AckTrialPreemptionSignalResponse {}
 
 // Retrieves the current searcher operation.
 message GetCurrentTrialSearcherOperationRequest {
@@ -299,6 +311,8 @@ message GetCurrentTrialSearcherOperationRequest {
 message GetCurrentTrialSearcherOperationResponse {
   // The current searcher operation.
   determined.experiment.v1.SearcherOperation op = 1;
+  // If the current operation has been completed.
+  bool complete = 2;
 }
 
 // Reports to the searcher that the trial has completed the current requested
@@ -316,7 +330,7 @@ message CompleteTrialSearcherValidationRequest {
 // Response to CompleteTrialSearcherValidationRequest
 message CompleteTrialSearcherValidationResponse {}
 
-// Report a voluntary early exit to the searcher.
+// Report a voluntary, permanent early exit to the searcher.
 message ReportTrialSearcherEarlyExitRequest {
   option (grpc.gateway.protoc_gen_swagger.options.openapiv2_schema) = {
     json_schema: { required: [ "trial_id", "reason" ] }

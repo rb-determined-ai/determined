@@ -1,186 +1,173 @@
 package internal
 
 import (
-	"sort"
-	"strconv"
+	"fmt"
 	"testing"
+	"time"
+
+	"github.com/davecgh/go-spew/spew"
+
+	cproto "github.com/determined-ai/determined/master/pkg/container"
 
 	"github.com/google/uuid"
 	"gotest.tools/assert"
-
-	"github.com/determined-ai/determined/master/internal/resourcemanagers"
-	"github.com/determined-ai/determined/master/internal/sproto"
-	"github.com/determined-ai/determined/master/pkg/actor"
-	"github.com/determined-ai/determined/master/pkg/actor/api"
-	cproto "github.com/determined-ai/determined/master/pkg/container"
-	"github.com/determined-ai/determined/master/pkg/model"
-	"github.com/determined-ai/determined/master/pkg/tasks"
 )
 
-type mockActor struct {
-	Messages []interface{}
-}
-
-func (a *mockActor) Receive(ctx *actor.Context) error {
-	switch msg := ctx.Message().(type) {
-	case api.WriteMessage:
-		a.Messages = append(a.Messages, msg.Message)
-		ctx.Respond(api.WriteResponse{})
-	default:
-	}
-	return nil
-}
-
-type mockAllocation struct {
-}
-
-func (mockAllocation) Summary() sproto.ContainerSummary {
-	return sproto.ContainerSummary{}
-}
-func (mockAllocation) Start(ctx *actor.Context, spec tasks.TaskSpec, rank int) {}
-func (mockAllocation) Kill(ctx *actor.Context)                                 {}
-
-func TestRendezvousInfo(t *testing.T) {
-	addresses := [][]cproto.Address{
-		{
-			{
-				ContainerPort: 1,
-			},
-			{
-				ContainerPort: 10,
-			},
-			{
-				ContainerPort: MinLocalRendezvousPort,
-			},
-			{
-				ContainerPort: 100,
-			},
-		},
-		{
-			{
-				ContainerPort: 200,
-			},
-			{
-				ContainerPort: 20,
-			},
-			{
-				ContainerPort: MinLocalRendezvousPort + 1,
-			},
-			{
-				ContainerPort: 2,
-			},
-		},
+func TestRendezvous(t *testing.T) {
+	const operations = 4
+	type testCase struct {
+		name  string
+		order []int
 	}
 
-	system := actor.NewSystem("")
+	runTestCase := func(t *testing.T, tc testCase) {
+		t.Run(tc.name, func(t *testing.T) {
+			// "task" with ranks is started.
+			c1, c2 := cproto.NewID(), cproto.NewID()
+			ranks := map[cproto.ID]int{c1: 0, c2: 1}
+			r := newRendezvous(0, ranks)
 
-	rp, created := system.ActorOf(
-		actor.Addr("resourceManagers"),
-		resourcemanagers.NewResourcePool(
-			&resourcemanagers.ResourcePoolConfig{PoolName: "default"},
-			nil,
-			resourcemanagers.NewFairShareScheduler(),
-			resourcemanagers.WorstFit,
-		))
-	if !created {
-		t.Fatal("unable to create cluster")
-	}
+			assert.Equal(t, r.rank(c1), 0)
+			assert.Equal(t, r.rank(c2), 1)
 
-	defaultTaskSpec := &tasks.TaskSpec{
-		HarnessPath:           "/opt/determined",
-		TaskContainerDefaults: model.TaskContainerDefaultsConfig{},
-	}
-
-	// This is the minimal trial to receive scheduler.ContainerStarted messages.
-	trial := &trial{
-		rm:                   rp,
-		experiment:           &model.Experiment{},
-		task:                 &sproto.AllocateRequest{},
-		allocations:          []sproto.Allocation{mockAllocation{}, mockAllocation{}},
-		experimentState:      model.ActiveState,
-		startedContainers:    make(map[cproto.ID]bool),
-		terminatedContainers: make(map[cproto.ID]terminatedContainerWithState),
-		containers:           make(map[cproto.ID]cproto.Container),
-		containerRanks:       make(map[cproto.ID]int),
-		containerAddresses:   make(map[cproto.ID][]cproto.Address),
-		containerSockets:     make(map[cproto.ID]*actor.Ref),
-		taskSpec:             defaultTaskSpec,
-	}
-	trialRef, created := system.ActorOf(actor.Addr("trial"), trial)
-	if !created {
-		t.Fatal("unable to create trial")
-	}
-
-	// Simulate a stray websocket connecting to the trial.
-	strayID := cproto.ID("stray-container-id")
-	system.Ask(trialRef, containerConnected{ContainerID: strayID})
-	t.Run("Stray sockets are not accepted", func(t *testing.T) {
-		_, strayRemains := trial.containerSockets[strayID]
-		assert.Assert(t, !strayRemains)
-	})
-
-	containers := make([]*cproto.Container, 0)
-	mockActors := make(map[*cproto.Container]*mockActor)
-	for idx, caddrs := range addresses {
-		c := &cproto.Container{
-			ID:    cproto.ID(strconv.Itoa(idx)),
-			State: cproto.Running,
-		}
-		mockActors[c] = &mockActor{}
-		ref, created := system.ActorOf(actor.Addr(uuid.New().String()), mockActors[c])
-		if !created {
-			t.Fatal("cannot make socket")
-		}
-
-		// Simulate trial containers connecting to the trial actor.
-		trial.containerSockets[c.ID] = ref
-
-		// Simulate the scheduling of a container.
-		system.Ask(trialRef, sproto.TaskContainerStateChanged{
-			Container: *c,
-			ContainerStarted: &sproto.TaskContainerStarted{
-				Addresses: caddrs,
-			},
-		}).Get()
-
-		containers = append(containers, c)
-	}
-
-	var rmsgs []*rendezvousInfoMessage
-	for _, c := range containers {
-		for _, msg := range mockActors[c].Messages {
-			tmsg, ok := msg.(*trialMessage)
-			if !ok {
-				continue
-			} else if tmsg.RendezvousInfo == nil {
-				continue
+			var ws []rendezvousWatcher
+			watch := func(cID cproto.ID) func() {
+				return func() {
+					w, err := r.watch(cID)
+					assert.NilError(t, err, cID)
+					ws = append(ws, w)
+				}
 			}
-			rmsgs = append(rmsgs, tmsg.RendezvousInfo)
-		}
+
+			startContainer := func(cID cproto.ID) func() {
+				return func() {
+					r.containerStarted(cID, addressesFromContainerID(cID))
+				}
+			}
+
+			ops := []func(){
+				watch(c1),
+				watch(c2),
+				startContainer(c1),
+				startContainer(c2),
+			}
+			for _, i := range tc.order {
+				assert.Check(t, !r.ready())
+				ops[i]()
+			}
+			assert.Check(t, r.ready())
+
+			rendezvousArrived := func(w rendezvousWatcher) {
+				select {
+				case resp := <-w.C:
+					assert.NilError(t, resp.err)
+					assert.Equal(t, len(resp.info.Addresses), 2)
+				default:
+					t.Fatal("expected rendezvous on first watcher but found none")
+				}
+			}
+			for _, w := range ws {
+				rendezvousArrived(w)
+			}
+
+			r.unwatch(c1)
+			r.unwatch(c2)
+		})
 	}
 
-	if e, f := len(addresses), len(rmsgs); e != f {
-		t.Fatalf("expected %d messages but found %d instead", e, f)
+	for _, ordering := range orderings(operations) {
+		runTestCase(t, testCase{
+			name:  spew.Sdump(ordering),
+			order: ordering,
+		})
 	}
+}
 
-	rep := rmsgs[0]
+func TestRendezvousUninitialized(t *testing.T) {
+	// Initialize a nil rendezvous
+	var r *rendezvous
 
-	t.Run("Rendezvous addrs are sorted", func(t *testing.T) {
-		var addrs []int
-		for _, addr := range rep.Addrs {
-			i, _ := strconv.Atoi(addr)
-			addrs = append(addrs, i)
-		}
-		assert.Assert(t, sort.IntsAreSorted(addrs), addrs)
+	// All API-connected methods (so ones a user could call) should not panic the actor.
+	id := cproto.NewID()
+	_, err := r.watch(id)
+	assert.ErrorContains(t, err, "no rendezvous for unallocated task")
+	r.unwatch(id)
+}
+
+func TestRendezvousValidation(t *testing.T) {
+	c1 := cproto.NewID()
+	r := newRendezvous(1, map[cproto.ID]int{
+		c1: 0,
 	})
 
-	t.Run("Rendezvous information is the same for all containers", func(t *testing.T) {
-		for idx, n := 1, len(rmsgs); idx < n; idx++ {
-			// Ignore the rank in comparisons.
-			rmsgs[idx].Rank = 0
-			assert.DeepEqual(t, rep, rmsgs[idx])
-		}
-	})
+	_, err := r.watch(cproto.NewID())
+	assert.ErrorContains(t, err, "rendezvous request from stale container")
+
+	_, err = r.watch(c1)
+	assert.NilError(t, err)
+
+	_, err = r.watch(c1)
+	assert.ErrorContains(t, err, "rendezvous request from already connected container")
+}
+
+func TestTerminationInRendezvous(t *testing.T) {
+	c1, c2 := cproto.NewID(), cproto.NewID()
+	ranks := map[cproto.ID]int{c1: 0, c2: 1}
+	r := newRendezvous(0, ranks)
+
+	r.containerStarted(c1, addressesFromContainerID(c1))
+	_, err := r.watch(c1)
+	assert.NilError(t, err)
+	r.containerTerminated(c1)
+
+	r.containerStarted(c2, addressesFromContainerID(c2))
+	_, err = r.watch(c2)
+	assert.NilError(t, err)
+
+	assert.Check(t, !r.ready())
+}
+
+func TestUnwatchInRendezvous(t *testing.T) {
+	c1, c2 := cproto.NewID(), cproto.NewID()
+	ranks := map[cproto.ID]int{c1: 0, c2: 1}
+	r := newRendezvous(0, ranks)
+
+	r.containerStarted(c1, addressesFromContainerID(c1))
+	_, err := r.watch(c1)
+	assert.NilError(t, err)
+	r.unwatch(c1)
+
+	r.containerStarted(c2, addressesFromContainerID(c2))
+	_, err = r.watch(c2)
+	assert.NilError(t, err)
+
+	assert.Check(t, !r.ready())
+}
+
+func TestRendezvousTimeout(t *testing.T) {
+	rendezvousTimeoutDuration = 0
+
+	c1, c2 := cproto.NewID(), cproto.NewID()
+	ranks := map[cproto.ID]int{c1: 0, c2: 1}
+	r := newRendezvous(0, ranks)
+
+	_, err := r.watch(c1)
+	assert.NilError(t, err)
+	r.containerStarted(c1, addressesFromContainerID(c1))
+
+	time.Sleep(-1)
+	assert.ErrorContains(t, r.checkTimeout(0), "some containers are taking a long time")
+}
+
+func addressesFromContainerID(cID cproto.ID) []cproto.Address {
+	return []cproto.Address{
+		{
+			ContainerIP:   "172.0.1.2",
+			ContainerPort: 1734,
+			HostIP:        fmt.Sprintf("%s.somehost.io", cID),
+			HostPort:      1734,
+		},
+	}
 }
 
 func TestPreemption(t *testing.T) {
@@ -189,20 +176,20 @@ func TestPreemption(t *testing.T) {
 
 	// Watch nil should not panic and return an error.
 	id := uuid.New()
-	_, err := p.watch(watchPreemption{id: id})
+	_, err := p.watch(id)
 	assert.Error(t, err, "no preemption status available nil preemption")
 
 	// All method on nil should not panic.
-	p.unwatch(unwatchPreemption{id: id})
+	p.unwatch(id)
 	p.preempt()
 	p.close()
 
 	// "task" is allocated.
-	p = newPreemption()
+	p = newPreemption(0)
 
 	// real watcher connects
 	id = uuid.New()
-	w, err := p.watch(watchPreemption{id: id})
+	w, err := p.watch(id)
 	assert.NilError(t, err)
 
 	// should immediately receive initial status.
@@ -223,11 +210,11 @@ func TestPreemption(t *testing.T) {
 	}
 
 	// preempted preemption unwatching should work.
-	p.unwatch(unwatchPreemption{id})
+	p.unwatch(id)
 
 	// new post-preemption watch connects
 	id = uuid.New()
-	w, err = p.watch(watchPreemption{id: id})
+	w, err = p.watch(id)
 	assert.NilError(t, err)
 
 	// should immediately receive initial status and initial status should be preemption.
@@ -238,5 +225,44 @@ func TestPreemption(t *testing.T) {
 	}
 
 	// preempted preemption unwatching should work.
-	p.unwatch(unwatchPreemption{id})
+	p.unwatch(id)
+}
+
+// orderings returns all orders for n operations.
+func orderings(n int) [][]int {
+	var xs []int
+	for i := 0; i < n; i++ {
+		xs = append(xs, i)
+	}
+	return permutations(xs)
+}
+
+// https://stackoverflow.com/questions/30226438/generate-all-permutations-in-go
+func permutations(arr []int) [][]int {
+	var helper func([]int, int)
+	res := [][]int{}
+
+	helper = func(arr []int, n int) {
+		if n == 1 {
+			tmp := make([]int, len(arr))
+			copy(tmp, arr)
+			res = append(res, tmp)
+		} else {
+			for i := 0; i < n; i++ {
+				helper(arr, n-1)
+				if n%2 == 1 {
+					tmp := arr[i]
+					arr[i] = arr[n-1]
+					arr[n-1] = tmp
+				} else {
+					tmp := arr[0]
+					arr[0] = arr[n-1]
+					arr[n-1] = tmp
+				}
+			}
+		}
+	}
+
+	helper(arr, len(arr))
+	return res
 }
