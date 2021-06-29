@@ -6,8 +6,8 @@ import TrialHeaderLeft from 'pages/TrialDetails/Header/TrialHeaderLeft';
 import { openOrCreateTensorboard } from 'services/api';
 import { getStateColorCssVar } from 'themes';
 import { ExperimentBase, RunState, TrialDetails } from 'types';
-import { getWorkload, isMetricsWorkload } from 'utils/step';
 import { terminalRunStates } from 'utils/types';
+import { getWorkload, isMetricsWorkload } from 'utils/workload';
 import { openCommand } from 'wait';
 
 export enum Action {
@@ -19,8 +19,7 @@ export const trialWillNeverHaveData = (trial: TrialDetails): boolean => {
   const isTerminal = terminalRunStates.has(trial.state);
   const workloadsWithSomeMetric = trial.workloads
     .map(getWorkload)
-    .filter(isMetricsWorkload)
-    .filter(workload => workload.metrics && workload.state === RunState.Completed);
+    .filter(wl => isMetricsWorkload(wl) && wl.metrics);
   return isTerminal && workloadsWithSomeMetric.length === 0;
 };
 
