@@ -2,8 +2,8 @@ import enum
 from typing import Optional
 
 class EarlyExitReason(enum.Enum):
-    INVALID_HP = "INVALID_HP"
-    INCOMPLETE = "INCOMPLETE"
+    INVALID_HP = "EXITED_REASON_INVALID_HP"
+    USER_REQUESTED_STOP = "EXITED_REASON_USER_REQUESTED_STOP"
 
 class Training:
     """
@@ -16,9 +16,8 @@ class Training:
         self._run_id = run_id
 
     def set_status(self, status: str) -> None:
-        # XXX: post this somewhere
-        # self._session.post(...)
-        pass
+        body = {"state": status}
+        self._session.post(f"/api/v1/trials/{self._trial_id}/runner/metadata", body=body)
 
     def get_last_validation(self) -> Optional[int]:
         # XXX: post this somewhere
@@ -27,7 +26,6 @@ class Training:
 
     # XXX: "total_batches"
     def report_training_metrics(self, batches_trained, metrics):
-        print("REPORTING TRAINING METRICS")
         # XXX: batch metrics
         # XXX: total_records
         # XXX: total_epochs
@@ -50,10 +48,9 @@ class Training:
         }
         self._session.post(f"/api/v1/trials/{self._trial_id}/validation_metrics", body=body)
 
-    def report_early_exit(self, reason):
-        # XXX: post this somewhere
-        # self._session.post(...)
-        pass
+    def report_early_exit(self, reason: EarlyExitReason):
+        body = {"reason": EarlyExitReason(reason).value}
+        self._session.post(f"/api/v1/trials/{self._trial_id}/early_exit", body=body)
 
     def is_best_validation_of_experiment(self, metric):
         # XXX: post this somewhere
