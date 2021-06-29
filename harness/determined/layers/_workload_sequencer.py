@@ -361,6 +361,9 @@ class WorkloadSequencer(workload.Source):
                             ),
                         ),
                     )
+                    # XXX: hack: hijack training loop and test early-exit behavior.
+                    # self.training.report_early_exit("EXITED_REASON_INVALID_HP")
+                    # return
 
                 # Done training for this searcher operation!
 
