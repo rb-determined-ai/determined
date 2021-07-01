@@ -388,6 +388,7 @@ export const decodeTrialResponseToTrialDetails = (
 
   return {
     ...trialItem,
+    runnerState: data.trial.runnerState,
     workloads: workloads || [],
   };
 };
