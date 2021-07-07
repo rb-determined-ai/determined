@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 
 import { StoreAction, useStoreDispatch } from 'contexts/Store';
 import StoreDecorator from 'storybook/StoreDecorator';
-import { CheckpointState, CheckpointStorageType, ExperimentBase, ExperimentHyperParamType,
+import { CheckpointStorageType, ExperimentBase, ExperimentHyperParamType,
   ExperimentSearcherName,
   RunState, TrialDetails } from 'types';
 
