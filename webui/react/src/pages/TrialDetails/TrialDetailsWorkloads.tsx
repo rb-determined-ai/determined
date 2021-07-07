@@ -19,7 +19,7 @@ import {
 import { isEqual } from 'utils/data';
 import { numericSorter } from 'utils/sort';
 import { extractMetricNames, extractMetricValue } from 'utils/trial';
-import { hasCheckpoint, hasCheckpointStep, workloadsToSteps } from 'utils/workloads';
+import { hasCheckpoint, hasCheckpointStep, workloadsToSteps } from 'utils/workload';
 
 import { columns as defaultColumns } from './TrialDetailsWorkloads.table';
 
