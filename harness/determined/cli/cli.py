@@ -81,7 +81,7 @@ def list_tasks(args: Namespace) -> None:
             task["priority"] if task["scheduler_type"] == "priority" else "N/A",
             task["resource_pool"],
         ]
-        for task_id, task in sorted(
+        for allocation_id, task in sorted(
             tasks.items(),
             key=lambda tup: (render.format_time(tup[1]["registered_time"]),),
         )

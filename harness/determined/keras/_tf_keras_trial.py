@@ -633,7 +633,7 @@ class TFKerasTrialController(det.TrialController):
                 repeat=True,
                 shuffle=self.context._fit_shuffle,
                 shuffle_seed=self.context.get_trial_seed(),
-                prior_batches_trained=self.env.initial_workload.total_batches_processed,
+                prior_batches_trained=self.env.last_batch,
             )
             enqueuer.start()
             self.enqueuers.append(enqueuer)

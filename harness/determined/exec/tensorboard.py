@@ -69,9 +69,9 @@ def main(args: List[str]) -> int:
     if exp_conf["checkpoint_storage"]["type"] == "s3":
         set_s3_region(exp_conf["checkpoint_storage"]["bucket"])
 
-    task_id = os.environ["DET_TASK_ID"]
+    allocation_id = os.environ["DET_ALLOCATION_ID"]
     port = os.environ["TENSORBOARD_PORT"]
-    tensorboard_addr = f"http://localhost:{port}/proxy/{task_id}"
+    tensorboard_addr = f"http://localhost:{port}/proxy/{allocation_id}"
     url = f"{tensorboard_addr}/data/plugin/scalars/tags"
     tensorboard_args = get_tensorboard_args(args)
 
@@ -113,7 +113,7 @@ def get_tensorboard_args(args: List[str]) -> List[str]:
     - Tensorboard 2.5.0 introduces an experimental feature (default load_fast=true)
     which prevents multiple plugins from loading correctly.
     """
-    task_id = os.environ["DET_TASK_ID"]
+    allocation_id = os.environ["DET_ALLOCATION_ID"]
     port = os.environ["TENSORBOARD_PORT"]
 
     version = args.pop(0)
@@ -123,7 +123,12 @@ def get_tensorboard_args(args: List[str]) -> List[str]:
     # legacy logdir_spec behavior is not supported by many tensorboard plugins
     logdir = args.pop(0)
 
-    tensorboard_args = ["tensorboard", f"--port={port}", f"--path_prefix=/proxy/{task_id}", *args]
+    tensorboard_args = [
+        "tensorboard",
+        f"--port={port}",
+        f"--path_prefix=/proxy/{allocation_id}",
+        *args,
+    ]
 
     major, minor = get_tensorboard_version(version)
 

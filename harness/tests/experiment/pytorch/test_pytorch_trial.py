@@ -144,6 +144,7 @@ class TestPyTorchTrial:
             workloads: workload.Stream,
             checkpoint_dir: typing.Optional[str] = None,
             latest_checkpoint: typing.Optional[typing.Dict[str, typing.Any]] = None,
+            last_batch: int = 0,
         ) -> det.TrialController:
             updated_hparams = {
                 "lr_scheduler_step_mode": pytorch.LRScheduler.StepMode.STEP_EVERY_BATCH.value,
@@ -156,6 +157,7 @@ class TestPyTorchTrial:
                 trial_seed=self.trial_seed,
                 checkpoint_dir=checkpoint_dir,
                 latest_checkpoint=latest_checkpoint,
+                last_batch=last_batch,
             )
 
         utils.checkpointing_and_restoring_test(make_trial_controller_fn, tmp_path)
@@ -164,14 +166,16 @@ class TestPyTorchTrial:
         # Build, train, and save a checkpoint with the normal hyperparameters.
         checkpoint_dir = str(tmp_path.joinpath("checkpoint"))
         latest_checkpoint = None
+        last_batch = 0
 
         def make_workloads_1() -> workload.Stream:
             trainer = utils.TrainAndValidate()
             yield from trainer.send(steps=1, validation_freq=1)
             interceptor = workload.WorkloadResponseInterceptor()
             yield from interceptor.send(workload.checkpoint_workload())
-            nonlocal latest_checkpoint
+            nonlocal latest_checkpoint, last_batch
             latest_checkpoint = interceptor.metrics_result()["metrics"].__json__()
+            last_batch = trainer.get_total_batches()
             yield workload.terminate_workload(), workload.ignore_workload_response
 
         controller1 = utils.make_trial_controller_from_trial_implementation(
@@ -199,6 +203,7 @@ class TestPyTorchTrial:
                 trial_seed=self.trial_seed,
                 checkpoint_dir=checkpoint_dir,
                 latest_checkpoint=latest_checkpoint,
+                last_batch=last_batch,
             )
             controller2.run()
 
@@ -321,6 +326,7 @@ class TestPyTorchTrial:
     def test_callbacks(self, tmp_path: pathlib.Path) -> None:
         checkpoint_dir = tmp_path.joinpath("checkpoint")
         latest_checkpoint = None
+        last_batch = 0
 
         controller = None  # type: ignore
 
@@ -344,8 +350,9 @@ class TestPyTorchTrial:
 
             interceptor = workload.WorkloadResponseInterceptor()
             yield from interceptor.send(workload.checkpoint_workload())
-            nonlocal latest_checkpoint
+            nonlocal latest_checkpoint, last_batch
             latest_checkpoint = interceptor.metrics_result()["metrics"].__json__()
+            last_batch = 1
             assert controller.trial.counter.__dict__ == {
                 "validation_steps_started": 1,
                 "validation_steps_ended": 1,
@@ -373,6 +380,7 @@ class TestPyTorchTrial:
             workloads=make_workloads2(),
             checkpoint_dir=str(checkpoint_dir),
             latest_checkpoint=latest_checkpoint,
+            last_batch=last_batch,
         )
         controller.run()
         assert controller.trial.counter.__dict__ == {
