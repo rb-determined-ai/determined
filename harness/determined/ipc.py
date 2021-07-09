@@ -439,3 +439,152 @@ class ZMQClient:
 
     def close(self) -> None:
         self.socket.close()
+
+
+import contextlib
+import os
+import socket
+import selectors
+import psutil
+
+class PIDServer:
+    """
+    PIDServer tracks PIDs reported by a set of pid_clients which connect to it.
+
+    PIDServer.run() will return when all pid_clients have reported a graceful shutdown and have
+    exited, or it will raise an exception if any pids disappear without reporting a graceful
+    shutdown.
+
+    PIDServer lets an sshd-based launch layer keep track of its worker processes, even when the
+    worker processes aren't proper child processes.
+    """
+
+    def __init__(self, num_clients):
+        self.num_clients = num_clients
+
+        self.started = False
+        self.sel = None
+        self.listener = None
+        self.port = None
+
+        self.pids = []
+        self.graceful_shutdowns = []
+        # maps a connection to its pid
+        self.conns = {}
+
+        self.done_accepting = False
+
+    def start(self):
+        if self.started:
+            return self
+        self.started = True
+        try:
+            self.sel = selectors.DefaultSelector()
+            self.listener = socket.socket()
+            # Bind to a random port.
+            self.listener.bind(("127.0.0.1", 0))
+            _, self.port = self.listener.getsockname()
+            self.listener.listen(self.num_clients)
+            self.listener.setblocking(False)
+            self.sel.register(self.listener, selectors.EVENT_READ)
+            return self
+        except Exception:
+            self.close()
+            raise
+
+    def close(self):
+        self.started = False
+        if self.listener:
+            self.listener.close()
+            self.listener = None
+        if self.sel:
+            self.sel.close()
+            self.sel = None
+
+    def __enter__(self):
+        return self.start()
+
+    def __exit__(self, *arg):
+        self.close()
+
+    def get_port(self):
+        assert self.port is not None, "must start first"
+        return self.port
+
+    def run(self, health_check=None, poll_period=1):
+        assert self.sel and self.listener, "must start first"
+        # Continue until we aren't waiting for anything else to shut down.
+        while self.listener or self.conns:
+            for key, mask in self.sel.select(timeout=poll_period):
+                if key.fileobj == self.listener:
+                    if mask & selectors.EVENT_READ:
+                        conn, _ = self.listener.accept()
+                        # We never write anything.
+                        conn.shutdown(socket.SHUT_WR)
+                        # First, receive the initial PID for this conn.  Should be nearly instant.
+                        buf = b""
+                        while b"\n" not in buf:
+                            data = conn.recv(4096)
+                            if not data:
+                                raise ValueError("pid_client did not deliver a PID!")
+                            buf += data
+                        pid = int(buf.split(b"\n")[0])
+                        self.pids.append(pid)
+                        self.conns[conn] = pid
+                        # Now listen for this connection to gracefully shut down (eventually)
+                        conn.setblocking(False)
+                        self.sel.register(conn, selectors.EVENT_READ)
+                        if len(self.pids) == self.num_clients:
+                            # That the last connection, close the listener.
+                            self.sel.unregister(self.listener)
+                            self.listener.close()
+                            self.listener = None
+                    else:
+                        raise ValueError("listener failed")
+                if key.fileobj in self.conns:
+                    conn = key.fileobj
+                    pid = self.conns[conn]
+                    if mask & selectors.EVENT_READ:
+                        data = conn.recv(4096)
+                        if data:
+                            if data == b"q":
+                                # Graceful termination code.
+                                self.graceful_shutdowns.append(pid)
+                            else:
+                                raise ValueError("invalid message from pid_client:", data)
+
+                    # Error, EOF, or anything else (This is not where we catch crashed pids).
+                    self.sel.unregister(conn)
+                    conn.close()
+                    del self.conns[conn]
+
+            # Any PIDs which exited without a graceful exit message indcates a crashed worker.
+            for pid in self.pids:
+                if pid not in self.graceful_shutdowns:
+                    if not psutil.pid_exists(pid):
+                        break
+
+            # If all workers exited gracefully, shut down nicely.
+            if len(self.graceful_shutdowns) == self.num_clients:
+                break
+
+            # Otherwise, run the externally-proided health check.
+            if health_check is not None:
+                health_check()
+
+        if len(self.graceful_shutdowns) != self.num_clients:
+            raise det.errors.WorkerError("Detected that worker process died.")
+
+
+@contextlib.contextmanager
+def pid_client(port):
+    with socket.socket() as sock:
+        sock.connect(("127.0.0.1", port))
+        # Send our PID to the PIDServer.
+        sock.send(b"%d\n"%os.getpid())
+        try:
+            yield
+            # Only when there is no exception do we send a graceful shutdown message.
+            sock.send(b"q")
+        finally:
+            sock.close()

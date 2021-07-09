@@ -270,3 +270,109 @@ def test_distributed_context(cross_size: int, local_size: int, force_tcp: bool) 
     # Close all contexts.
     for context in contexts:
         context.close()
+
+import time
+
+
+class TestPIDServer:
+    def test_normal_execution(self) -> None:
+        with ipc.PIDServer(2) as pid_server:
+            port = pid_server.get_port()
+
+            def worker_proc():
+                with ipc.pid_client(port):
+                    time.sleep(.5)
+
+            procs = [
+                multiprocessing.Process(target=worker_proc),
+                multiprocessing.Process(target=worker_proc),
+            ]
+
+            for p in procs:
+                p.start()
+
+            pid_server.run()
+
+            for p in procs:
+                p.join()
+
+    def test_worker_crashes(self) -> None:
+        with ipc.PIDServer(2) as pid_server:
+            port = pid_server.get_port()
+
+            def worker_proc():
+                with ipc.pid_client(port):
+                    time.sleep(.5)
+
+            def crashing_worker_proc():
+                with ipc.pid_client(port):
+                    time.sleep(.1)
+                    raise ValueError("Crashing...")
+
+            procs = [
+                multiprocessing.Process(target=worker_proc),
+                multiprocessing.Process(target=crashing_worker_proc),
+            ]
+
+            for p in procs:
+                p.start()
+
+            with pytest.raises(det.errors.WorkerError):
+                pid_server.run()
+
+            for p in procs:
+                p.join()
+
+    def test_health_check_pre_connect(self) -> None:
+        with ipc.PIDServer(2) as pid_server:
+            port = pid_server.get_port()
+
+            fail_time = time.time() + .2
+
+            def worker_proc():
+                with ipc.pid_client(port):
+                    time.sleep(.5)
+
+            def health_check():
+                assert time.time() < fail_time
+
+            procs = [
+                multiprocessing.Process(target=worker_proc),
+            ]
+
+            for p in procs:
+                p.start()
+
+            with pytest.raises(AssertionError):
+                pid_server.run(health_check, poll_period=.05)
+
+            for p in procs:
+                p.join()
+
+    def test_health_check_post_connect(self) -> None:
+        # Case 4: health check fails (post-PIDClient connect).
+        with ipc.PIDServer(2) as pid_server:
+            port = pid_server.get_port()
+
+            fail_time = time.time() + .2
+
+            def worker_proc():
+                with ipc.pid_client(port):
+                    time.sleep(.5)
+
+            def health_check():
+                assert time.time() < fail_time
+
+            procs = [
+                multiprocessing.Process(target=worker_proc),
+                multiprocessing.Process(target=worker_proc),
+            ]
+
+            for p in procs:
+                p.start()
+
+            with pytest.raises(AssertionError):
+                pid_server.run(health_check, poll_period=.05)
+
+            for p in procs:
+                p.join()
