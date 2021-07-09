@@ -250,26 +250,29 @@ class SubprocessLauncher:
         try:
             self._do_startup_message_sequence()
 
+            try:
+                # Wait for all worker processes to exit nicely, or for any to crash.
+                while self._worker_process_ids:
+                    self._health_check_workers()
+                    if self._worker_process_ids and self._subproc.poll() is not None:
+                        # Some worker processes remain, but the main subprocess exited anyway??
+                        det.errors.WorkerError("main subprocess failed while workers exist")
+            except det.errors.WorkerError:
+                # Wait some time for logging to catch up.
+                time.sleep(3)
+                # Kill the worker process.
+                self._subproc.kill()
+                self._subproc.wait()
+                raise
+
             if self.rendezvous_info.get_rank() == 0:
-                # The chief node just waits for horovodrun to exit.
+                # Chief container: wait for horovodrun to exit on its own.
                 ret = self._subproc.wait()
                 if ret != 0:
-                    raise ValueError(f"horovodrun exited with error code: {ret}")
+                    raise ValueError("main subprocess failed", ret)
             else:
-                # The worker nodes wait for for all ssh sessions to exit, then kills sshd.
-                while self._worker_process_ids:
-                    time.sleep(1)
-                    if self._subproc.poll() is not None:
-                        raise det.errors.WorkerError("sshd process died")
-                    for pid in self._worker_process_ids:
-                        if not psutil.pid_exists(pid):
-                            logging.debug("detected that sshd session died")
-                            self._worker_process_ids.remove(pid)
-
-                # Wait a few seconds, in case some processes are in the process of exiting but have
-                # not finished logging quite yet.
+                # Wait some time for logging to catch up.
                 time.sleep(3)
-
                 # Shut down sshd.
                 self._subproc.kill()
                 self._subproc.wait()
@@ -284,17 +287,40 @@ class SubprocessLauncher:
             # garbage collection earlier.
             del self.broadcast_server
 
+    def _health_check_workers(self) -> None:
+        """
+        Raise an error if the workers die.
+        """
+
+        for subprocess_id in self._worker_process_ids:
+            for pid in self._worker_process_ids:
+                # WNOHANG is only available on Unix-like system.  A windows-based system would
+                # need to run os.waitpid() on different threads or suprocesses.
+                ret = os.waitpid(pid, os.WNOHANG)
+                if ret == (0, 0):
+                    # This subprocess is still running.
+                    continue
+                # Interpret the output of waitpid (Unix-specific).
+                _, wstatus = ret
+                if os.WIFEXITED(wstatus):
+                    # Normal exit.
+                    exit_code = os.WEXITSTATUS(wstatus)
+                    if exit_code != 0:
+                        raise det.errors.WorkerError("worker exited with code", exit_code)
+                    self._worker_process_ids.remove(pid)
+                elif os.WIFSIGNALED(wstatus):
+                    # Killed by a signal.
+                    raise det.errors.WorkerError("worker killed by signal", os.WTERMSIG(wstatus))
+                else:
+                    # Other types of exit are possible, but highly unlikley.
+                    raise det.errors.WorkerError("worker crashed, but not by exit or signal")
+
     def _health_check(self) -> None:
         """
-        Raise an error if the main subprocess dies.
+        Raise an error if the main subprocess or if any workers die.
         """
 
         if self._subproc.poll() is not None:
-            raise det.errors.WorkerError("Training process died.")
+            raise ValueError("main subprocess died")
 
-        for subprocess_id in self._worker_process_ids:
-            if not psutil.pid_exists(subprocess_id):
-                # Wait a few seconds, in case some processes are in the process of exiting but have
-                # not finished logging quite yet.
-                time.sleep(3)
-                raise det.errors.WorkerError("Detected that worker process died.")
+        self._health_check_workers()
