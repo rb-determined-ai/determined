@@ -8831,7 +8831,7 @@ export const InternalApiFetchParamCreator = function (configuration?: Configurat
     return {
         /**
          * 
-         * @summary Acknowledge the receipt of a preemption signal, indicating that stopping is a result of it. This is necessary to distinguish a container exiting because of a preemption signal from a container that happens to be exiting as it is preempted.
+         * @summary Acknowledge the receipt of a signal to stop the current running task early. This is used indicate and exit 0 isn't final. Used for HP search directed early stops and preemption signals (not necessarily just scheduler preemption).
          * @param {number} trialId The requested trial&#39;s id.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -9837,7 +9837,7 @@ export const InternalApiFp = function(configuration?: Configuration) {
     return {
         /**
          * 
-         * @summary Acknowledge the receipt of a preemption signal, indicating that stopping is a result of it. This is necessary to distinguish a container exiting because of a preemption signal from a container that happens to be exiting as it is preempted.
+         * @summary Acknowledge the receipt of a signal to stop the current running task early. This is used indicate and exit 0 isn't final. Used for HP search directed early stops and preemption signals (not necessarily just scheduler preemption).
          * @param {number} trialId The requested trial&#39;s id.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -10290,7 +10290,7 @@ export const InternalApiFactory = function (configuration?: Configuration, fetch
     return {
         /**
          * 
-         * @summary Acknowledge the receipt of a preemption signal, indicating that stopping is a result of it. This is necessary to distinguish a container exiting because of a preemption signal from a container that happens to be exiting as it is preempted.
+         * @summary Acknowledge the receipt of a signal to stop the current running task early. This is used indicate and exit 0 isn't final. Used for HP search directed early stops and preemption signals (not necessarily just scheduler preemption).
          * @param {number} trialId The requested trial&#39;s id.
          * @param {*} [options] Override http request option.
          * @throws {RequiredError}
@@ -10546,7 +10546,7 @@ export const InternalApiFactory = function (configuration?: Configuration, fetch
 export class InternalApi extends BaseAPI {
     /**
      * 
-     * @summary Acknowledge the receipt of a preemption signal, indicating that stopping is a result of it. This is necessary to distinguish a container exiting because of a preemption signal from a container that happens to be exiting as it is preempted.
+     * @summary Acknowledge the receipt of a signal to stop the current running task early. This is used indicate and exit 0 isn't final. Used for HP search directed early stops and preemption signals (not necessarily just scheduler preemption).
      * @param {number} trialId The requested trial&#39;s id.
      * @param {*} [options] Override http request option.
      * @throws {RequiredError}
