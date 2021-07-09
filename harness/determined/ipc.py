@@ -539,6 +539,7 @@ class PIDServer:
                             self.sel.unregister(self.listener)
                             self.listener.close()
                             self.listener = None
+                            print("-------------- listener done")
                     else:
                         raise ValueError("listener failed")
                 if key.fileobj in self.conns:
@@ -550,9 +551,11 @@ class PIDServer:
                             if data == b"q":
                                 # Graceful termination code.
                                 self.graceful_shutdowns.append(pid)
+                                print("-------------- got graceful shutdown")
                             else:
                                 raise ValueError("invalid message from pid_client:", data)
 
+                    print("-------------- done with conn for pid", self.conns[conn])
                     # Error, EOF, or anything else (This is not where we catch crashed pids).
                     self.sel.unregister(conn)
                     conn.close()
@@ -560,9 +563,10 @@ class PIDServer:
 
             # Any PIDs which exited without a graceful exit message indcates a crashed worker.
             for pid in self.pids:
+                print("-------------- checking pid", pid)
                 if pid not in self.graceful_shutdowns:
-                    if not psutil.pid_exists(pid):
-                        break
+                    if psutil.Process(pid).status !=  pid_exists(pid):
+                        raise det.errors.WorkerError("Detected that worker process died.")
 
             # If all workers exited gracefully, shut down nicely.
             if len(self.graceful_shutdowns) == self.num_clients:
@@ -573,7 +577,7 @@ class PIDServer:
                 health_check()
 
         if len(self.graceful_shutdowns) != self.num_clients:
-            raise det.errors.WorkerError("Detected that worker process died.")
+            raise det.errors.WorkerError("PIDServer finished with all graceful exits.")
 
 
 @contextlib.contextmanager
@@ -582,6 +586,7 @@ def pid_client(port):
         sock.connect(("127.0.0.1", port))
         # Send our PID to the PIDServer.
         sock.send(b"%d\n"%os.getpid())
+        print("-------------- worker sending exiting gracefully")
         try:
             yield
             # Only when there is no exception do we send a graceful shutdown message.

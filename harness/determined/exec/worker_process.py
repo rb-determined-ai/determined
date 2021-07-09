@@ -50,6 +50,7 @@ def main() -> None:
                 worker_process_env.rendezvous_info,
                 worker_process_env.hvd_config,
             ).run()
+        print("-------------- worker thinks its exiting gracefully")
 
 
 if __name__ == "__main__":

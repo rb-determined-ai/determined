@@ -300,13 +300,17 @@ class TestPIDServer:
         with ipc.PIDServer(2) as pid_server:
             port = pid_server.get_port()
 
+            # Enforce that the crashed worker causes the exit before the other worker exits.
+            deadline = time.time() + 2
+
             def worker_proc():
                 with ipc.pid_client(port):
-                    time.sleep(.5)
+                    # Wait for the crashing process to cause us to die.
+                    time.sleep(3)
 
             def crashing_worker_proc():
                 with ipc.pid_client(port):
-                    time.sleep(.1)
+                    time.sleep(.5)
                     raise ValueError("Crashing...")
 
             procs = [
@@ -319,6 +323,8 @@ class TestPIDServer:
 
             with pytest.raises(det.errors.WorkerError):
                 pid_server.run()
+
+            assert time.time() < deadline, "crashing worker did not trigger exit"
 
             for p in procs:
                 p.join()
