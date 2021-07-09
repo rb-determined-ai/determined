@@ -53,8 +53,8 @@ type trial struct {
 	warmStartCheckpoint *model.Checkpoint
 	generatedKeys *ssh.PrivateAndPublicKeys
 
-	// experimentState is essentially or our target state.
-	experimentState model.State
+	// targetState is the state we're aiming for. It's patched by experiment staet changes and kill trial.
+	targetState model.State
 	// searcher encapsulates the searcher state of the trial.
 	searcher TrialSearcherState
 	// restarts is a failure count, it increments when the trial fails and we retry it.
@@ -100,9 +100,9 @@ func newTrial(
 	modelDefinition archive.Archive,
 ) *trial {
 	return &trial{
-		experimentID:    experimentID,
-		experimentState: initialState,
-		searcher:        searcher,
+		experimentID: experimentID,
+		targetState:  initialState,
+		searcher:     searcher,
 
 		rm:     rm,
 		logger: logger,
@@ -133,19 +133,19 @@ func (t *trial) Receive(ctx *actor.Context) error {
 		return t.close()
 
 	case model.State:
-		t.experimentState = msg
+		t.targetState = msg
 		switch {
-		case t.experimentState == model.ActiveState:
-			return t.allocate(ctx)
-		case t.experimentState == model.PausedState:
+		case t.targetState == model.ActiveState:
+			return t.maybeAllocate(ctx)
+		case t.targetState == model.PausedState:
 			return t.terminate(ctx, true)
-		case model.StoppingStates[t.experimentState]:
+		case model.StoppingStates[t.targetState]:
 			return t.terminate(ctx, false)
 		}
 	case TrialSearcherState:
 		t.searcher = msg
 		if !t.searcher.Complete {
-			return t.allocate(ctx)
+			return t.maybeAllocate(ctx)
 		}
 
 	case sproto.ResourcesAllocated, sproto.TaskContainerStateChanged,
@@ -163,10 +163,10 @@ func (t *trial) Receive(ctx *actor.Context) error {
 	return nil
 }
 
-func (t *trial) allocate(ctx *actor.Context) error {
+func (t *trial) maybeAllocate(ctx *actor.Context) error {
 	if !(t.task == nil &&
 		!t.searcher.Complete &&
-		t.experimentState == model.ActiveState &&
+		t.targetState == model.ActiveState &&
 		!t.stopped) {
 		return nil
 	}
@@ -438,6 +438,9 @@ func (t *trial) terminate(ctx *actor.Context, graceful bool) error {
 		ctx.Tell(ctx.Self(), preemptionTimeout{t.runID})
 	default:
 		ctx.Log().Info("forcibly terminating trial")
+		if graceful {
+			t.preemption.markUnacknowledgeable()
+		}
 		for _, allocation := range t.allocations {
 			allocation.Kill(ctx)
 		}
@@ -447,78 +450,63 @@ func (t *trial) terminate(ctx *actor.Context, graceful bool) error {
 
 // terminated deciding what action to take to cleanup or restart a trial and taking that action.
 func (t *trial) terminated(ctx *actor.Context) error {
-	var reschedule, failed bool
-	var report workload.ExitedReason
+	var failed bool
 	var stop model.State
+	var stopReason workload.ExitedReason
 	status := t.taskExitStatus()
 	switch {
-	// Check reasons that indicate this termination should be final.
 	case t.searcher.Finished():
 		stop = model.CompletedState
-	case model.StoppingStates[t.experimentState]:
-		stop = model.StoppingToTerminalStates[t.experimentState]
-	case status.Failure != nil && t.restarts == t.config.MaxRestarts():
-		failed = true
-		report = workload.Errored
-		stop = model.ErrorState
-
-	// Cases where an exit is acceptable.
+	case model.StoppingStates[t.targetState]:
+		stop = model.StoppingToTerminalStates[t.targetState]
+	case t.preemption.unacknowledgeable():
 	case status.Failure.FailureType == aproto.TaskAborted:
-		reschedule = true
+		// TODO(XXX): Agent failures?
 	case status.Failure != nil:
 		failed = true
-		reschedule = true
-	case t.experimentState == model.PausedState:
-		reschedule = false
-	case t.preemption.acknowledged() && t.searcher.Complete:
-		reschedule = false
+		if t.restarts >= t.config.MaxRestarts() {
+			stop = model.ErrorState
+			stopReason = workload.Errored
+		}
 	case t.preemption.acknowledged():
-		reschedule = true
-
-	// If no error and nothing else to guide us, this must've been a "user requested stop".
 	default:
-		report = workload.UserCanceled
 		stop = model.CanceledState
+		stopReason = workload.UserCanceled
 	}
 
-	ctx.Log().
+	l := ctx.Log().
 		WithError(status.Failure).
-		WithField("reschedule", reschedule).
-		WithField("reported_reason", report).
+		WithField("reported_reason", stopReason).
 		WithField("stopping_state", stop).
 		WithField("search_finished", t.searcher.Complete).
-		WithField("preempted", t.preemption.acknowledged()).
-		Info("trial terminated")
+		WithField("preempted", t.preemption.acknowledged() || t.preemption.unacknowledgeable())
+	if failed {
+		l.Errorf("trial failed (restart %d/%d)", t.restarts, t.config.MaxRestarts())
+		t.restarts++
+		if err := t.db.SetTrialRestartCount(t.id, t.restarts); err != nil {
+			return errors.Wrap(err, "failed to persist restart count")
+		}
+	} else {
+		l.Info("trial terminated")
+	}
+
 
 	t.release(ctx)
 	if err := t.reset(); err != nil {
 		return errors.Wrap(err, "failed to reset task")
 	}
 
-	if failed {
-		ctx.Log().WithError(status.Failure).Errorf(
-			"trial failed (restart %d/%d)", t.restarts, t.config.MaxRestarts(),
-		)
-		t.restarts++
-		if err := t.db.SetTrialRestartCount(t.id, t.restarts); err != nil {
-			return errors.Wrap(err, "failed to persist restart count")
-		}
-	}
-
-	if reschedule {
-		if err := t.allocate(ctx); err != nil {
-			return errors.Wrap(err, "failed to reschedule trial")
-		}
-	}
-
-	if report != "" {
-		ctx.Tell(ctx.Self().Parent(), trialReportEarlyExit{trialID: t.id, reason: report})
-	}
-
 	if stop != "" {
+		if stopReason != "" {
+			ctx.Tell(ctx.Self().Parent(), trialReportEarlyExit{trialID: t.id, reason: stopReason})
+		}
 		t.stop(ctx, stop)
+		return nil
 	}
 
+	if err := t.maybeAllocate(ctx); err != nil {
+		return errors.Wrap(err, "failed to reschedule trial")
+	}
 	return nil
 }
 
@@ -890,6 +878,7 @@ type (
 		runID        int
 		preempted    bool
 		acked bool
+		unackable bool
 		preemptedAt  time.Time
 		// Map of watcher ID to a bool indicating if the trial should preempt.
 		watchers map[uuid.UUID]chan<- struct{}
@@ -961,6 +950,24 @@ func (p *preemption) acknowledged() bool {
 	}
 
 	return p.acked
+}
+
+// markUnacknowledgeable marks that we _were_ going to preempt a trial but
+// decided instead to kill it, so it's all gravy if it throws some errors.
+func (p *preemption) markUnacknowledgeable() bool {
+	if p == nil {
+		return false
+	}
+
+	return p.unackable
+}
+
+func (p *preemption) unacknowledgeable() bool {
+	if p == nil {
+		return false
+	}
+
+	return p.unackable
 }
 
 func (p *preemption) checkTimeout(runID int) error {
