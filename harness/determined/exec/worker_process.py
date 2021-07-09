@@ -5,8 +5,9 @@ import pathlib
 import sys
 
 import determined as det
-from determined import ipc, layers, load
+from determined import ipc, layers, load, horovod
 from determined.common.api import certs
+# horovod.hvd.require_horovod_type('torch', 'testing')
 
 
 def config_logging(worker_process_env: layers.WorkerProcessContext) -> None:

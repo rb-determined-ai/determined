@@ -258,11 +258,21 @@ class SubprocessLauncher:
                         # Some worker processes remain, but the main subprocess exited anyway??
                         det.errors.WorkerError("main subprocess failed while workers exist")
             except det.errors.WorkerError:
-                # Wait some time for logging to catch up.
+                # Wait some time for horovod to notice the dead worker.  Otherwise, horovod will
+                # pass the SIGINT to the workers and will wrongly report that one of the SIGINT'd
+                # worker was the first to die.
                 time.sleep(3)
-                # Kill the worker process.
-                self._subproc.kill()
+                # Kill the main subprocess process.
+                if self.rendezvous_info.get_rank() == 0:
+                    import signal
+                    # horovodrun emits terrifying warnings about leaked semaphors on SIGTERM.
+                    self._subproc.send_signal(signal.SIGINT)
+                else:
+                    # sshd can be killed without issue.
+                    self._subproc.kill()
                 self._subproc.wait()
+                # Wait some time for logging to catch up.
+                time.sleep(1)
                 raise
 
             if self.rendezvous_info.get_rank() == 0:
@@ -294,26 +304,29 @@ class SubprocessLauncher:
 
         for subprocess_id in self._worker_process_ids:
             for pid in self._worker_process_ids:
-                # WNOHANG is only available on Unix-like system.  A windows-based system would
-                # need to run os.waitpid() on different threads or suprocesses.
-                ret = os.waitpid(pid, os.WNOHANG)
-                if ret == (0, 0):
-                    # This subprocess is still running.
-                    continue
-                # Interpret the output of waitpid (Unix-specific).
-                _, wstatus = ret
-                if os.WIFEXITED(wstatus):
-                    # Normal exit.
-                    exit_code = os.WEXITSTATUS(wstatus)
-                    if exit_code != 0:
-                        raise det.errors.WorkerError("worker exited with code", exit_code)
-                    self._worker_process_ids.remove(pid)
-                elif os.WIFSIGNALED(wstatus):
-                    # Killed by a signal.
-                    raise det.errors.WorkerError("worker killed by signal", os.WTERMSIG(wstatus))
-                else:
-                    # Other types of exit are possible, but highly unlikley.
-                    raise det.errors.WorkerError("worker crashed, but not by exit or signal")
+                p = psutil.Process(pid)
+                if p.status() in (psutil.STATUS_DEAD, psutil.STATUS_STOPPED, psutil.STATUS_ZOMBIE):
+                    raise det.errors.WorkerError("worker died")
+                # # WNOHANG is only available on Unix-like system.  A windows-based system would
+                # # need to run os.waitpid() on different threads or suprocesses.
+                # ret = os.waitpid(pid, os.WNOHANG)
+                # if ret == (0, 0):
+                #     # This subprocess is still running.
+                #     continue
+                # # Interpret the output of waitpid (Unix-specific).
+                # _, wstatus = ret
+                # if os.WIFEXITED(wstatus):
+                #     # Normal exit.
+                #     exit_code = os.WEXITSTATUS(wstatus)
+                #     if exit_code != 0:
+                #         raise det.errors.WorkerError("worker exited with code", exit_code)
+                #     self._worker_process_ids.remove(pid)
+                # elif os.WIFSIGNALED(wstatus):
+                #     # Killed by a signal.
+                #     raise det.errors.WorkerError("worker killed by signal", os.WTERMSIG(wstatus))
+                # else:
+                #     # Other types of exit are possible, but highly unlikley.
+                #     raise det.errors.WorkerError("worker crashed, but not by exit or signal")
 
     def _health_check(self) -> None:
         """
