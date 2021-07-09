@@ -43,14 +43,18 @@ def main() -> None:
         faulthandler.dump_traceback_later(30, repeat=True)
 
     # Establish the connection to the ZMQBroadcastServer in this container.
-    with ipc.pid_client(worker_process_env.pid_server_port):
+    pub_url = f"tcp://localhost:{worker_process_env.broadcast_pub_port}"
+    sub_url = f"tcp://localhost:{worker_process_env.broadcast_pull_port}"
+    with ipc.ZMQBroadcastClient(pub_url, sub_url) as broadcast_client:
+
+        _ = layers.SubprocessReceiver(broadcast_client)
+
         with det._catch_sys_exit():
             load.prepare_controller(
                 worker_process_env.env,
                 worker_process_env.rendezvous_info,
                 worker_process_env.hvd_config,
             ).run()
-        print("-------------- worker thinks its exiting gracefully")
 
 
 if __name__ == "__main__":
