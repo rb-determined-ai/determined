@@ -93,7 +93,6 @@ class WorkloadSequencer(workload.Source):
         self.env = env
         self.session = session
         self._dist = dist
-        # XXX: exception here does not cause exit (4 slots per trial)
         self.training = _training.Training(session, env.det_trial_id, env.task_run_id, env.det_experiment_id)
         api_path = f"/api/v1/trials/{env.det_trial_id}/checkpoint_metadata"
         static_metadata = {"trial_id": env.det_trial_id, "trial_run_id": env.task_run_id}
@@ -415,7 +414,6 @@ def make_compatibility_workloads(session, env, dist) -> workload.Stream:
         for wkld, response_fn in WorkloadSequencer(env, session, dist):
             # Distribute to peers.
             _ = dist._zmq_broadcast(wkld)
-            # XXX: raising an exception here does not cause the trial to exit!
             # Process workload.
             try:
                 yield wkld, response_fn

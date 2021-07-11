@@ -2,6 +2,7 @@ import logging
 import os
 import pathlib
 import pickle
+import signal
 import subprocess
 import sys
 import time
@@ -203,10 +204,26 @@ class SubprocessLauncher:
             try:
                 self.pid_server.run(self._health_check)
             except det.errors.WorkerError:
-                # Wait a few seconds, in case some processes are in the process of
-                # exiting but have not finished logging quite yet.
-                time.sleep(3)
+                if self.is_chief_machine:
+                    # Give horovodrun a few seconds to notice the process has died.
+                    time.sleep(3)
+                    # Use SIGINT on horovod, because it freaks out with SIGTERM.
+                    self._subproc.send_signal(signal.SIGINT)
+                else:
+                    self._subproc.kill()
+                self._subproc.wait()
+                # Give some time to finish logging.
+                time.sleep(1)
                 raise
+
+            if self.is_chief_machine:
+                # wait for horovod run to exit normally.
+                ret = self._subproc.wait()
+                if ret != 0:
+                    raise ValueError("horovodrun crashed after all our subprocesses exited")
+            else:
+                self._subproc.kill()
+                self._subproc.wait()
 
     def _health_check(self) -> None:
         """

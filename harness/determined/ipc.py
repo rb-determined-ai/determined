@@ -511,85 +511,131 @@ class PIDServer:
         assert self.port is not None, "must start first"
         return self.port
 
+    def handle_listener(self, mask):
+        """
+        Handle an event on a listener socket (aka, accept a connection).
+        """
+        assert self.listener
+        if mask & selectors.EVENT_READ:
+            conn, _ = self.listener.accept()
+            # We never write anything.
+            conn.shutdown(socket.SHUT_WR)
+            # First, receive the initial PID for this conn.  Should be nearly instant.
+            buf = b""
+            while b"\n" not in buf:
+                data = conn.recv(4096)
+                if not data:
+                    raise ValueError("pid_client did not deliver a PID!")
+                buf += data
+            pid = int(buf.split(b"\n")[0])
+            self.pids.append(pid)
+            self.conns[conn] = pid
+            # Now listen for this connection to gracefully shut down (eventually)
+            conn.setblocking(False)
+            self.sel.register(conn, selectors.EVENT_READ)
+            if len(self.pids) == self.num_clients:
+                # That the last connection, close the listener.
+                self.sel.unregister(self.listener)
+                self.listener.close()
+                self.listener = None
+        else:
+            raise ValueError("listener failed")
+
+    def handle_conn(self, conn, mask):
+        """
+        Handle an event on a connection socket.
+        """
+        pid = self.conns[conn]
+        if mask & selectors.EVENT_READ:
+            data = conn.recv(4096)
+            # Only read the final byte of the message (ignore extra keepalives)
+            if data:
+                if data[:-1] == b"k":
+                    # keepalive message; leave the connection alone.
+                    return
+                if data[:-1] == b"q":
+                    # Graceful termination code.
+                    self.graceful_shutdowns.append(pid)
+                else:
+                    raise ValueError("invalid message from pid_client:", data)
+
+        # Error, EOF, or anything else (This is not where we catch crashed pids).
+        if self.listener is not None:
+            raise det.errors.WorkerError("worker died before all workers connected")
+
+        self.sel.unregister(conn)
+        conn.close()
+        del self.conns[conn]
+
+    def check_pids(self):
+        """
+        Any PIDs which exited without a graceful exit message indcates a crashed worker.
+        """
+        for pid in self.pids:
+            if pid not in self.graceful_shutdowns:
+                pid_ok = False
+                try:
+                    if psutil.Process(pid).status() not in (
+                        psutil.STATUS_DEAD, psutil.STATUS_STOPPED, psutil.STATUS_ZOMBIE,
+                    ):
+                        pid_ok = True
+                except psutil.NoSuchProcess:
+                    pass
+                if not pid_ok:
+                    raise det.errors.WorkerError("Detected that worker process died.")
+
     def run(self, health_check=None, poll_period=1):
-        assert self.sel and self.listener, "must start first"
+        assert self.sel, "must start first"
         # Continue until we aren't waiting for anything else to shut down.
         while self.listener or self.conns:
+            # Get some read events.
             for key, mask in self.sel.select(timeout=poll_period):
                 if key.fileobj == self.listener:
-                    if mask & selectors.EVENT_READ:
-                        conn, _ = self.listener.accept()
-                        # We never write anything.
-                        conn.shutdown(socket.SHUT_WR)
-                        # First, receive the initial PID for this conn.  Should be nearly instant.
-                        buf = b""
-                        while b"\n" not in buf:
-                            data = conn.recv(4096)
-                            if not data:
-                                raise ValueError("pid_client did not deliver a PID!")
-                            buf += data
-                        pid = int(buf.split(b"\n")[0])
-                        self.pids.append(pid)
-                        self.conns[conn] = pid
-                        # Now listen for this connection to gracefully shut down (eventually)
-                        conn.setblocking(False)
-                        self.sel.register(conn, selectors.EVENT_READ)
-                        if len(self.pids) == self.num_clients:
-                            # That the last connection, close the listener.
-                            self.sel.unregister(self.listener)
-                            self.listener.close()
-                            self.listener = None
-                            print("-------------- listener done")
-                    else:
-                        raise ValueError("listener failed")
-                if key.fileobj in self.conns:
+                    self.handle_listener(mask)
+                elif key.fileobj in self.conns:
                     conn = key.fileobj
-                    pid = self.conns[conn]
-                    if mask & selectors.EVENT_READ:
-                        data = conn.recv(4096)
-                        if data:
-                            if data == b"q":
-                                # Graceful termination code.
-                                self.graceful_shutdowns.append(pid)
-                                print("-------------- got graceful shutdown")
-                            else:
-                                raise ValueError("invalid message from pid_client:", data)
+                    self.handle_conn(conn, mask)
 
-                    print("-------------- done with conn for pid", self.conns[conn])
-                    # Error, EOF, or anything else (This is not where we catch crashed pids).
-                    self.sel.unregister(conn)
-                    conn.close()
-                    del self.conns[conn]
-
-            # Any PIDs which exited without a graceful exit message indcates a crashed worker.
-            for pid in self.pids:
-                print("-------------- checking pid", pid)
-                if pid not in self.graceful_shutdowns:
-                    if psutil.Process(pid).status !=  pid_exists(pid):
-                        raise det.errors.WorkerError("Detected that worker process died.")
+            self.check_pids()
 
             # If all workers exited gracefully, shut down nicely.
             if len(self.graceful_shutdowns) == self.num_clients:
-                break
+                return
 
             # Otherwise, run the externally-proided health check.
             if health_check is not None:
                 health_check()
 
-        if len(self.graceful_shutdowns) != self.num_clients:
-            raise det.errors.WorkerError("PIDServer finished with all graceful exits.")
 
+class PIDClient:
+    def __init__(self, port):
+        self.port = port
+        self.sock = None
 
-@contextlib.contextmanager
-def pid_client(port):
-    with socket.socket() as sock:
-        sock.connect(("127.0.0.1", port))
-        # Send our PID to the PIDServer.
-        sock.send(b"%d\n"%os.getpid())
-        print("-------------- worker sending exiting gracefully")
+    def start(self):
+        if self.sock is not None:
+            return self
         try:
-            yield
-            # Only when there is no exception do we send a graceful shutdown message.
-            sock.send(b"q")
-        finally:
-            sock.close()
+            self.sock = socket.socket()
+            self.sock.connect(("127.0.0.1", self.port))
+            # Send our PID to the PIDServer.
+            self.sock.send(b"%d\n"%os.getpid())
+            return self
+        except Exception:
+            self.close()
+            raise
+
+    def close(self, graceful=False):
+        if self.sock:
+            self.sock.close()
+            self.sock = None
+
+    def __enter__(self):
+        return self.start()
+
+    def __exit__(self, e, *arg):
+        self.close(graceful=e is None)
+
+    def keep_alive(self):
+        assert self.sock, "must be started first"
+        self.sock.send(b"k")
