@@ -19,7 +19,8 @@ from tensorflow_estimator.python.estimator.training import _NewCheckpointListene
 import determined as det
 from determined import estimator, horovod, layers, monkey_patch, tensorboard, workload
 from determined._tf_rng import get_rng_state, set_rng_state
-from determined.common import check
+from determined.common import check, experimental
+from determined.common.api import certs
 from determined.horovod import hvd
 
 VERY_LARGE_NUMBER = 9999999999999999
@@ -420,8 +421,9 @@ class EstimatorTrialController(det.TrialController):
 
         self._init_model()
 
+        session = experimental.Session(None, None, None, certs.cli_cert)
         self.workloads = layers.make_compatibility_workloads(
-            None, self.env, self.context.distributed
+            session, self.env, self.context.distributed
         )
 
     @staticmethod

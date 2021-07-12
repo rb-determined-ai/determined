@@ -10,7 +10,8 @@ import torch
 
 import determined as det
 from determined import horovod, layers, pytorch, util, workload
-from determined.common import check
+from determined.common import check, experimental
+from determined.common.api import certs
 from determined.horovod import hvd
 from determined.util import has_param
 
@@ -49,8 +50,9 @@ class PyTorchTrialController(det.TrialController):
         self.validation_loader = None  # type: Optional[torch.utils.data.DataLoader]
         self._set_data_loaders()
 
+        session = experimental.Session(None, None, None, certs.cli_cert)
         self.workloads = layers.make_compatibility_workloads(
-            None, self.env, self.context.distributed
+            session, self.env, self.context.distributed
         )
 
     @staticmethod

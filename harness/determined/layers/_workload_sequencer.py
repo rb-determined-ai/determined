@@ -76,11 +76,13 @@ class WorkloadSequencer(workload.Source):
             self,
             last_ckpt=0,
             total_batches=0,
+            total_records=0,
             step_id=0,
             last_val=0,
         ):
             self.last_ckpt = last_ckpt
             self.total_batches = total_batches
+            self.total_records = total_records
             self.step_id = step_id
             self.last_val = last_val
 
@@ -174,11 +176,20 @@ class WorkloadSequencer(workload.Source):
         # train step is complete, process the result
 
         metrics = response.get("metrics", {}).get("avg_metrics", {})
+        batch_metrics = response.get("metrics", {}).get("batch_metrics", [])
+        num_inputs = response.get("metrics", {}).get("num_inputs")
+
         self.state.total_batches += num_batches
+        if num_inputs is None or self.state.total_records is None:
+            self.state.total_records = None
+        else:
+            self.state.total_records += num_inputs
         self.state.step_id += 1
         self.training.report_training_metrics(
             total_batches=self.state.total_batches,
             metrics=metrics,
+            batch_metrics=batch_metrics,
+            total_records=self.state.total_records,
         )
 
         exited_reason = response.get("exited_reason")
@@ -193,6 +204,8 @@ class WorkloadSequencer(workload.Source):
         self.check_for_preemption()
 
     def is_best_validation(self, now, before):
+        if before is None:
+            return True
         smaller_is_better = self.env.experiment_config["searcher"]["smaller_is_better"]
         return (now < before) if smaller_is_better else (now > before)
 
@@ -218,6 +231,8 @@ class WorkloadSequencer(workload.Source):
             self.training.early_exit(_training.EarlyExitReason.INVALID_HP)
             raise ShouldExit()
 
+        metrics = response["metrics"]["validation_metrics"]
+
         # report to the searcher API first, so we don't end up in a situation where we die between
         # reporting to the metrics API and when we come back we refuse to repeat a validation, but
         # we also don't have any validation metrics to report the the searcher API.
@@ -231,7 +246,7 @@ class WorkloadSequencer(workload.Source):
         #
         # But we can't do that without breaking behavior.
         searcher_metric_name = self.env.experiment_config["searcher"]["metric"]
-        searcher_metric = response["metrics"]["validation_metrics"][searcher_metric_name]
+        searcher_metric = metrics[searcher_metric_name]
         if op is not None and self.batches_until_op_complete(op) < 1:
             op.complete(searcher_metric)
 
@@ -243,7 +258,7 @@ class WorkloadSequencer(workload.Source):
         self.state.last_val = self.state.total_batches
         self.training.report_validation_metrics(
             total_batches=self.state.total_batches,
-            metrics=response["metrics"],
+            metrics=metrics,
         )
 
         if exited_reason is not None:
@@ -415,11 +430,9 @@ def make_compatibility_workloads(session, env, dist) -> workload.Stream:
             # Distribute to peers.
             _ = dist._zmq_broadcast(wkld)
             # Process workload.
-            try:
-                yield wkld, response_fn
-            finally:
-                # Wait for peers.
-                _ = dist._zmq_gather(None)
+            yield wkld, response_fn
+            # Wait for peers.
+            _ = dist._zmq_gather(None)
         # Break the workers out of their loop.
         _ = dist._zmq_broadcast(None)
     else:
@@ -428,9 +441,7 @@ def make_compatibility_workloads(session, env, dist) -> workload.Stream:
             wkld = dist._zmq_broadcast(None)
             if wkld is None:
                 break
-            try:
-                # Process workload.
-                yield wkld, lambda _: None
-            finally:
-                # Tell chief we finished.
-                _ = dist._zmq_gather(None)
+            # Process workload.
+            yield wkld, lambda _: None
+            # Tell chief we finished.
+            _ = dist._zmq_gather(None)

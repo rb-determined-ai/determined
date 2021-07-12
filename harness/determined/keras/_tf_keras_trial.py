@@ -23,7 +23,8 @@ from tensorflow.python.keras.utils.mode_keys import ModeKeys
 import determined as det
 from determined import horovod, keras, layers, util, workload
 from determined._tf_rng import get_rng_state, set_rng_state
-from determined.common import check
+from determined.common import check, experimental
+from determined.common.api import certs
 from determined.horovod import hvd
 
 IMPOSSIBLY_LARGE_EPOCHS = sys.maxsize
@@ -242,7 +243,6 @@ class TFKerasTrialController(det.TrialController):
         trial_inst: det.Trial,
         context: det.TrialContext,
         env: det.EnvContext,
-        workloads: workload.Stream,
         rendezvous_info: det.RendezvousInfo,
         hvd_config: horovod.HorovodContext,
     ) -> det.TrialController:
@@ -284,7 +284,6 @@ class TFKerasTrialController(det.TrialController):
             keras.TFKerasTrainConfig(training_data, validation_data, tf_keras_callbacks),
             context,
             env,
-            workloads,
             rendezvous_info,
             hvd_config,
         )
@@ -349,8 +348,9 @@ class TFKerasTrialController(det.TrialController):
         self.train_workload_len = 0
         self.test_inputs = 0
 
+        session = experimental.Session(None, None, None, certs.cli_cert)
         self.workloads = layers.make_compatibility_workloads(
-            None, self.env, self.context.distributed
+            session, self.env, self.context.distributed
         )
 
     def _check_training_data(self) -> None:
