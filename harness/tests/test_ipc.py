@@ -280,8 +280,10 @@ class TestPIDServer:
             port = pid_server.get_port()
 
             def worker_proc():
-                with ipc.pid_client(port):
-                    time.sleep(.5)
+                with ipc.PIDClient(port) as pid_client:
+                    for _ in range(5):
+                        pid_client.keep_alive()
+                        time.sleep(.1)
 
             procs = [
                 multiprocessing.Process(target=worker_proc),
@@ -296,6 +298,8 @@ class TestPIDServer:
             for p in procs:
                 p.join()
 
+            assert len(pid_server.graceful_shutdowns) == 2
+
     def test_worker_crashes(self) -> None:
         with ipc.PIDServer(2) as pid_server:
             port = pid_server.get_port()
@@ -304,12 +308,12 @@ class TestPIDServer:
             deadline = time.time() + 2
 
             def worker_proc():
-                with ipc.pid_client(port):
+                with ipc.PIDClient(port):
                     # Wait for the crashing process to cause us to die.
                     time.sleep(3)
 
             def crashing_worker_proc():
-                with ipc.pid_client(port):
+                with ipc.PIDClient(port):
                     time.sleep(.5)
                     raise ValueError("Crashing...")
 
@@ -329,6 +333,8 @@ class TestPIDServer:
             for p in procs:
                 p.join()
 
+            assert len(pid_server.graceful_shutdowns) == 0
+
     def test_health_check_pre_connect(self) -> None:
         with ipc.PIDServer(2) as pid_server:
             port = pid_server.get_port()
@@ -336,7 +342,7 @@ class TestPIDServer:
             fail_time = time.time() + .2
 
             def worker_proc():
-                with ipc.pid_client(port):
+                with ipc.PIDClient(port):
                     time.sleep(.5)
 
             def health_check():
@@ -354,6 +360,8 @@ class TestPIDServer:
 
             for p in procs:
                 p.join()
+
+            assert len(pid_server.graceful_shutdowns) == 0
 
     def test_health_check_post_connect(self) -> None:
         # Case 4: health check fails (post-PIDClient connect).
@@ -363,7 +371,7 @@ class TestPIDServer:
             fail_time = time.time() + .2
 
             def worker_proc():
-                with ipc.pid_client(port):
+                with ipc.PIDClient(port):
                     time.sleep(.5)
 
             def health_check():
@@ -382,3 +390,5 @@ class TestPIDServer:
 
             for p in procs:
                 p.join()
+
+            assert len(pid_server.graceful_shutdowns) == 0

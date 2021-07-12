@@ -548,13 +548,15 @@ class PIDServer:
         pid = self.conns[conn]
         if mask & selectors.EVENT_READ:
             data = conn.recv(4096)
-            # Only read the final byte of the message (ignore extra keepalives)
+            # Messages are all one-byte codes for easy parsing.
+            # The protocol is "any number of keepalive "k"s followed by a quit "q", so we can
+            # safely ignore everything except the final byte of the message.
             if data:
-                if data[:-1] == b"k":
+                if data[-1:] == b"k":
                     # keepalive message; leave the connection alone.
                     return
-                if data[:-1] == b"q":
-                    # Graceful termination code.
+                elif data[-1:] == b"q":
+                    # Graceful shutdown code.
                     self.graceful_shutdowns.append(pid)
                 else:
                     raise ValueError("invalid message from pid_client:", data)
@@ -627,14 +629,17 @@ class PIDClient:
 
     def close(self, graceful=False):
         if self.sock:
+            if graceful:
+                self.sock.send(b"q")
             self.sock.close()
             self.sock = None
 
     def __enter__(self):
         return self.start()
 
-    def __exit__(self, e, *arg):
-        self.close(graceful=e is None)
+    def __exit__(self, e_type, e_val, _):
+        # A "graceful" exit is either no exit code at all, or a sys.exit(0).
+        self.close(graceful=e_type is None or e_type == SystemExit and e_val.code == 0)
 
     def keep_alive(self):
         assert self.sock, "must be started first"
