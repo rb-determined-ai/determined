@@ -1,13 +1,10 @@
 import faulthandler
 import logging
-import os
 import pathlib
 import subprocess
 import sys
 
-import determined as det
-from determined import ipc, layers, load
-from determined.common.api import certs
+from determined import ipc, layers
 
 
 def config_logging(worker_process_env: layers.WorkerProcessContext) -> None:
@@ -17,6 +14,7 @@ def config_logging(worker_process_env: layers.WorkerProcessContext) -> None:
     )
     logging.getLogger().setLevel(log_level)
     logging.debug("Starting worker_process.")
+
 
 def main() -> int:
     if len(sys.argv) != 2:
@@ -42,6 +40,7 @@ def main() -> int:
                 return ret
             except subprocess.TimeoutExpired:
                 pid_client.keep_alive()
+
 
 if __name__ == "__main__":
     sys.exit(main())

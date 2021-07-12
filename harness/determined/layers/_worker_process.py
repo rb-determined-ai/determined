@@ -6,12 +6,10 @@ import signal
 import subprocess
 import sys
 import time
-from typing import Any, Dict, List, Optional, cast
-
-import psutil
+from typing import Optional, cast
 
 import determined as det
-from determined import constants, horovod, ipc, workload
+from determined import constants, horovod, ipc
 from determined.common import check
 
 
@@ -161,9 +159,7 @@ class SubprocessLauncher:
         logging.debug(f"Non-chief [{self.rendezvous_info.get_rank()}] waiting for sshd service.")
         while True:
             ssh_attempt_cmd = ["ssh", "localhost", "-p", str(constants.HOROVOD_SSH_PORT), "ls"]
-            ssh_attempt_process = subprocess.run(
-                ssh_attempt_cmd, timeout=10
-            )
+            ssh_attempt_process = subprocess.run(ssh_attempt_cmd, timeout=10)
             if ssh_attempt_process.returncode == 0:
                 logging.debug(
                     f"Non-chief [{self.rendezvous_info.get_rank()}] successfully "

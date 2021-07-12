@@ -6,7 +6,6 @@ subprocess otherwise.
 """
 
 import distutils.util
-import faulthandler
 import json
 import logging
 import os
@@ -16,7 +15,7 @@ import simplejson
 
 import determined as det
 import determined.common
-from determined import gpu, horovod, layers, load, workload
+from determined import gpu, horovod, layers
 from determined.common import constants, storage
 from determined.common.api import certs
 

@@ -1,7 +1,9 @@
+import logging
+
 import determined as det
 
-import logging
 log = logging.getLogger("generic")
+
 
 class Checkpointing:
     """
@@ -28,7 +30,7 @@ class Checkpointing:
         resources = resources or {}
         metadata = metadata or {}
         required = {"framework", "format", "total_batches"}
-        allowed = required.union({ "total_records", "total_epochs"})
+        allowed = required.union({"total_records", "total_epochs"})
         missing = [k for k in required if k not in metadata]
         extra = [k for k in metadata.keys() if k not in allowed]
         if missing:

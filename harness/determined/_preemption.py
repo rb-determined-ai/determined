@@ -6,8 +6,6 @@ from typing import Any, Optional
 import requests
 
 import determined as det
-from determined.common import api
-from determined.common.api import certs
 
 log = logging.getLogger("generic")
 

@@ -2,8 +2,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 import determined as det
-from determined import workload
-from determined.common import check, types
+from determined.common import check
 
 
 class EnvContext:

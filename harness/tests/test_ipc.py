@@ -4,6 +4,7 @@ import multiprocessing
 import sys
 import textwrap
 import threading
+import time
 import traceback
 from typing import Any, Callable, List, Optional, cast
 
@@ -271,8 +272,6 @@ def test_distributed_context(cross_size: int, local_size: int, force_tcp: bool) 
     for context in contexts:
         context.close()
 
-import time
-
 
 class TestPIDServer:
     def test_normal_execution(self) -> None:
@@ -283,7 +282,7 @@ class TestPIDServer:
                 with ipc.PIDClient(port) as pid_client:
                     for _ in range(5):
                         pid_client.keep_alive()
-                        time.sleep(.1)
+                        time.sleep(0.1)
 
             procs = [
                 multiprocessing.Process(target=worker_proc),
@@ -314,7 +313,7 @@ class TestPIDServer:
 
             def crashing_worker_proc():
                 with ipc.PIDClient(port):
-                    time.sleep(.5)
+                    time.sleep(0.5)
                     raise ValueError("Crashing...")
 
             procs = [
@@ -339,11 +338,11 @@ class TestPIDServer:
         with ipc.PIDServer(2) as pid_server:
             port = pid_server.get_port()
 
-            fail_time = time.time() + .2
+            fail_time = time.time() + 0.2
 
             def worker_proc():
                 with ipc.PIDClient(port):
-                    time.sleep(.5)
+                    time.sleep(0.5)
 
             def health_check():
                 assert time.time() < fail_time
@@ -356,7 +355,7 @@ class TestPIDServer:
                 p.start()
 
             with pytest.raises(AssertionError):
-                pid_server.run(health_check, poll_period=.05)
+                pid_server.run(health_check, poll_period=0.05)
 
             for p in procs:
                 p.join()
@@ -368,11 +367,11 @@ class TestPIDServer:
         with ipc.PIDServer(2) as pid_server:
             port = pid_server.get_port()
 
-            fail_time = time.time() + .2
+            fail_time = time.time() + 0.2
 
             def worker_proc():
                 with ipc.PIDClient(port):
-                    time.sleep(.5)
+                    time.sleep(0.5)
 
             def health_check():
                 assert time.time() < fail_time
@@ -386,7 +385,7 @@ class TestPIDServer:
                 p.start()
 
             with pytest.raises(AssertionError):
-                pid_server.run(health_check, poll_period=.05)
+                pid_server.run(health_check, poll_period=0.05)
 
             for p in procs:
                 p.join()

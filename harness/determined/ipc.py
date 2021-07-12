@@ -1,6 +1,10 @@
+import os
+import selectors
+import socket
 import time
 from typing import Any, Callable, List, Optional, Tuple, cast
 
+import psutil
 import zmq
 from zmq.error import ZMQBindError, ZMQError
 
@@ -349,8 +353,8 @@ class ZMQServer:
         return self.ports
 
     def send(self, py_obj: Any) -> None:
-        for socket in self.sockets:
-            socket.send_pyobj(py_obj)  # type: ignore
+        for sock in self.sockets:
+            sock.send_pyobj(py_obj)  # type: ignore
 
     def receive_blocking(self, send_rank: int) -> Any:
         check.lt(send_rank, len(self.sockets))
@@ -399,8 +403,8 @@ class ZMQServer:
         return messages
 
     def close(self) -> None:
-        for socket in self.sockets:
-            socket.close()  # type: ignore
+        for sock in self.sockets:
+            sock.close()  # type: ignore
 
 
 class ZMQClient:
@@ -440,12 +444,6 @@ class ZMQClient:
     def close(self) -> None:
         self.socket.close()
 
-
-import contextlib
-import os
-import socket
-import selectors
-import psutil
 
 class PIDServer:
     """
@@ -578,7 +576,9 @@ class PIDServer:
                 pid_ok = False
                 try:
                     if psutil.Process(pid).status() not in (
-                        psutil.STATUS_DEAD, psutil.STATUS_STOPPED, psutil.STATUS_ZOMBIE,
+                        psutil.STATUS_DEAD,
+                        psutil.STATUS_STOPPED,
+                        psutil.STATUS_ZOMBIE,
                     ):
                         pid_ok = True
                 except psutil.NoSuchProcess:
@@ -621,7 +621,7 @@ class PIDClient:
             self.sock = socket.socket()
             self.sock.connect(("127.0.0.1", self.port))
             # Send our PID to the PIDServer.
-            self.sock.send(b"%d\n"%os.getpid())
+            self.sock.send(b"%d\n" % os.getpid())
             return self
         except Exception:
             self.close()

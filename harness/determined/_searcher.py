@@ -1,14 +1,6 @@
 import enum
-import json
-import selectors
-import socket
-import threading
-from typing import Any, Optional
-
-from determined.common import api
-from determined.common.api import certs
-
 import logging
+
 log = logging.getLogger("generic")
 
 
@@ -81,7 +73,9 @@ class SearcherOp:
             "searcherMetric": searcher_metric,
         }
         log.info(f"op.complete({searcher_metric})")
-        self._session.post(f"/api/v1/trials/{self._trial_id}/searcher/completed_operation", body=body)
+        self._session.post(
+            f"/api/v1/trials/{self._trial_id}/searcher/completed_operation", body=body
+        )
 
 
 class AdvancedSearcher:
@@ -99,7 +93,9 @@ class AdvancedSearcher:
             return None
 
         length = body["op"]["validateAfter"]["length"]
-        return SearcherOp(self._session, self._trial_id, unit=Unit(length["units"]), length=length["length"])
+        return SearcherOp(
+            self._session, self._trial_id, unit=Unit(length["units"]), length=length["length"]
+        )
 
     def ops(self):
         """

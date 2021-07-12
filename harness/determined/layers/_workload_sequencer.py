@@ -2,14 +2,10 @@ import sys
 from typing import Any, Generator, Optional, Tuple
 
 import determined as det
-from determined import workload
-from determined.common import check
 
 # XXX: clean up these paths
-from determined import _searcher
-from determined import _training
-from determined import _checkpointing
-from determined import _preemption
+from determined import _checkpointing, _preemption, _searcher, _training, workload
+from determined.common import check
 
 WorkloadStreamElem = Tuple[workload.Workload, workload.ResponseFunc]
 
@@ -95,7 +91,9 @@ class WorkloadSequencer(workload.Source):
         self.env = env
         self.session = session
         self._dist = dist
-        self.training = _training.Training(session, env.det_trial_id, env.task_run_id, env.det_experiment_id)
+        self.training = _training.Training(
+            session, env.det_trial_id, env.task_run_id, env.det_experiment_id
+        )
         api_path = f"/api/v1/trials/{env.det_trial_id}/checkpoint_metadata"
         static_metadata = {"trial_id": env.det_trial_id, "trial_run_id": env.task_run_id}
         self.checkpointing = _checkpointing.Checkpointing(session, api_path, static_metadata)
