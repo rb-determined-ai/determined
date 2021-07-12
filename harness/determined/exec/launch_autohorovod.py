@@ -33,11 +33,15 @@ ENVIRONMENT_VARIABLE_KEYS = {
     "DET_EXPERIMENT_CONFIG",
     "DET_HPARAMS",
     "DET_LATEST_CHECKPOINT",
+    "DET_INITIAL_TOTAL_BATCHES",
     "DET_RENDEZVOUS_PORT",
     "DET_TRIAL_RUNNER_NETWORK_INTERFACE",
     "DET_TASK_TOKEN",
     "DET_TASK_RUN_ID",
 }
+# XXX:
+if "DET_INITIAL_TOTAL_BATCHES" not in os.environ:
+    os.environ["DET_INITIAL_TOTAL_BATCHES"] = "0"
 
 
 def main() -> None:
@@ -66,6 +70,8 @@ def main() -> None:
     with open(os.environ["DET_LATEST_CHECKPOINT"], "r") as f:
         latest_checkpoint = json.load(f)
 
+    initial_total_batches = int(os.environ["DET_INITIAL_TOTAL_BATCHES"])
+
     use_gpu = distutils.util.strtobool(os.environ.get("DET_USE_GPU", "false"))
     slot_ids = json.loads(os.environ["DET_SLOT_IDS"])
     det_rendezvous_port = os.environ["DET_RENDEZVOUS_PORT"]
@@ -91,6 +97,7 @@ def main() -> None:
         experiment_config=experiment_config,
         hparams=hparams,
         latest_checkpoint=latest_checkpoint,
+        initial_total_batches=initial_total_batches,
         use_gpu=use_gpu,
         container_gpus=container_gpus,
         slot_ids=slot_ids,

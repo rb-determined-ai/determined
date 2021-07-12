@@ -104,7 +104,7 @@ class DeterminedControlHook(estimator.RunHook):
         # On resuming from checkpoint, _current_global_step is None for one batch
         if self._current_global_step is None:
             self.prof.update_batch_idx(
-                self.estimator_trial_controller.env.initial_workload.total_batches_processed
+                self.estimator_trial_controller.env.initial_total_batches
             )
         else:
             self.prof.update_batch_idx(self._current_global_step)
