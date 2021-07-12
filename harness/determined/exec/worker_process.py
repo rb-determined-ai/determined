@@ -18,10 +18,10 @@ def config_logging(worker_process_env: layers.WorkerProcessContext) -> None:
     logging.getLogger().setLevel(log_level)
     logging.debug("Starting worker_process.")
 
-def main() -> None:
+def main() -> int:
     if len(sys.argv) != 2:
         print("worker_process_env_path must be provided as a commandline argument", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     # Load the worker process env.
     worker_process_env_path = pathlib.Path(sys.argv[1])
@@ -38,9 +38,10 @@ def main() -> None:
         while True:
             try:
                 ret = p.wait(timeout=60)
-                sys.exit(ret)
+                pid_client.close(graceful=(ret==0))
+                return ret
             except subprocess.TimeoutExpired:
                 pid_client.keep_alive()
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

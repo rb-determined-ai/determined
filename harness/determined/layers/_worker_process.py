@@ -222,6 +222,9 @@ class SubprocessLauncher:
                 if ret != 0:
                     raise ValueError("horovodrun crashed after all our subprocesses exited")
             else:
+                # Give horovod a few seconds to notice the process has died nicely.
+                # XXX: find a way to hold the sshd process open until horovodrun is done.
+                time.sleep(3)
                 self._subproc.kill()
                 self._subproc.wait()
 
