@@ -64,7 +64,7 @@ def do_request(
     host: str,
     path: str,
     params: Optional[Dict[str, Any]] = None,
-    body: Optional[Dict[str, Any]] = None,
+    body: Any = None,
     headers: Optional[Dict[str, str]] = None,
     authenticated: bool = True,
     auth: Optional[authentication.Authentication] = None,
@@ -177,7 +177,7 @@ def delete(
 def post(
     host: str,
     path: str,
-    body: Optional[Dict[str, Any]] = None,
+    body: Any = None,
     headers: Optional[Dict[str, str]] = None,
     authenticated: bool = True,
     auth: Optional[authentication.Authentication] = None,

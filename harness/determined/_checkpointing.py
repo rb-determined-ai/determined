@@ -1,6 +1,8 @@
 import logging
+from typing import Any, Dict, Optional
 
 import determined as det
+from determined.experimental import client
 
 log = logging.getLogger("generic")
 
@@ -20,13 +22,23 @@ class Checkpointing:
       - can we have a way to update metadata for a checkpoint after-the-fact?
     """
 
-    def __init__(self, session, api_path, static_metadata=None) -> None:
+    def __init__(
+        self,
+        session: client.Session,
+        api_path: str,
+        static_metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self._session = session
         self._static_metadata = static_metadata or {}
         self._static_metadata["determined_version"] = det.__version__
         self._api_path = api_path
 
-    def _report_checkpoint(self, uuid, resources=None, metadata=None):
+    def _report_checkpoint(
+        self,
+        uuid: str,
+        resources: Optional[Dict[str, int]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
         resources = resources or {}
         metadata = metadata or {}
         required = {"framework", "format", "total_batches"}

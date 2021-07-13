@@ -2,7 +2,7 @@ import os
 import selectors
 import socket
 import time
-from typing import Any, Callable, List, Optional, Tuple, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 import psutil
 import zmq
@@ -457,22 +457,22 @@ class PIDServer:
     worker processes aren't proper child processes.
     """
 
-    def __init__(self, num_clients):
+    def __init__(self, num_clients: int) -> None:
         self.num_clients = num_clients
 
         self.started = False
-        self.sel = None
-        self.listener = None
-        self.port = None
+        self.sel = None  # type: Optional[selectors.BaseSelector]
+        self.listener = None  # type: Optional[socket.socket]
+        self.port = None  # type: Optional[int]
 
-        self.pids = []
-        self.graceful_shutdowns = []
+        self.pids = []  # type: List[int]
+        self.graceful_shutdowns = []  # type: List[int]
         # maps a connection to its pid
-        self.conns = {}
+        self.conns = {}  # type: Dict[socket.socket, int]
 
         self.done_accepting = False
 
-    def start(self):
+    def start(self) -> "PIDServer":
         if self.started:
             return self
         self.started = True
@@ -490,7 +490,7 @@ class PIDServer:
             self.close()
             raise
 
-    def close(self):
+    def close(self) -> None:
         self.started = False
         if self.listener:
             self.listener.close()
@@ -499,20 +499,21 @@ class PIDServer:
             self.sel.close()
             self.sel = None
 
-    def __enter__(self):
+    def __enter__(self) -> "PIDServer":
         return self.start()
 
-    def __exit__(self, *arg):
+    def __exit__(self, *_: Any) -> None:
         self.close()
 
-    def get_port(self):
+    def get_port(self) -> int:
         assert self.port is not None, "must start first"
         return self.port
 
-    def handle_listener(self, mask):
+    def handle_listener(self, mask: int) -> None:
         """
         Handle an event on a listener socket (aka, accept a connection).
         """
+        assert self.sel
         assert self.listener
         if mask & selectors.EVENT_READ:
             conn, _ = self.listener.accept()
@@ -539,10 +540,11 @@ class PIDServer:
         else:
             raise ValueError("listener failed")
 
-    def handle_conn(self, conn, mask):
+    def handle_conn(self, conn: socket.socket, mask: int) -> None:
         """
         Handle an event on a connection socket.
         """
+        assert self.sel
         pid = self.conns[conn]
         if mask & selectors.EVENT_READ:
             data = conn.recv(4096)
@@ -567,7 +569,7 @@ class PIDServer:
         conn.close()
         del self.conns[conn]
 
-    def check_pids(self):
+    def check_pids(self) -> None:
         """
         Any PIDs which exited without a graceful exit message indcates a crashed worker.
         """
@@ -586,7 +588,7 @@ class PIDServer:
                 if not pid_ok:
                     raise det.errors.WorkerError("Detected that worker process died.")
 
-    def run(self, health_check=None, poll_period=1):
+    def run(self, health_check: Optional[Callable] = None, poll_period: float = 1) -> None:
         assert self.sel, "must start first"
         # Continue until we aren't waiting for anything else to shut down.
         while self.listener or self.conns:
@@ -596,6 +598,7 @@ class PIDServer:
                     self.handle_listener(mask)
                 elif key.fileobj in self.conns:
                     conn = key.fileobj
+                    assert isinstance(conn, socket.socket)
                     self.handle_conn(conn, mask)
 
             self.check_pids()
@@ -610,11 +613,11 @@ class PIDServer:
 
 
 class PIDClient:
-    def __init__(self, port):
+    def __init__(self, port: int) -> None:
         self.port = port
-        self.sock = None
+        self.sock = None  # type: Optional[socket.socket]
 
-    def start(self):
+    def start(self) -> "PIDClient":
         if self.sock is not None:
             return self
         try:
@@ -624,23 +627,23 @@ class PIDClient:
             self.sock.send(b"%d\n" % os.getpid())
             return self
         except Exception:
-            self.close()
+            self.close(graceful=False)
             raise
 
-    def close(self, graceful=False):
+    def close(self, graceful: bool) -> None:
         if self.sock:
             if graceful:
                 self.sock.send(b"q")
             self.sock.close()
             self.sock = None
 
-    def __enter__(self):
+    def __enter__(self) -> "PIDClient":
         return self.start()
 
-    def __exit__(self, e_type, e_val, _):
+    def __exit__(self, e_type: type, e_val: Exception, _: Any) -> None:
         # A "graceful" exit is either no exit code at all, or a sys.exit(0).
-        self.close(graceful=e_type is None or e_type == SystemExit and e_val.code == 0)
+        self.close(graceful=e_type is None or isinstance(e_val, SystemExit) and e_val.code == 0)
 
-    def keep_alive(self):
+    def keep_alive(self) -> None:
         assert self.sock, "must be started first"
         self.sock.send(b"k")

@@ -6,6 +6,7 @@ from typing import Any, Optional
 import requests
 
 import determined as det
+from determined.experimental import client
 
 log = logging.getLogger("generic")
 
@@ -33,7 +34,7 @@ class _PreemptionWatcher(threading.Thread):
                print('finished without preemption signal')
     """
 
-    def __init__(self, session: str, trial_id: int) -> None:
+    def __init__(self, session: client.Session, trial_id: int) -> None:
         self._session = session
         self._trial_id = trial_id
 
@@ -118,8 +119,8 @@ class Preemption:
 
     def __init__(
         self,
-        session,
-        trial_id,
+        session: client.Session,
+        trial_id: int,
         dist: det.DistributedContext,
     ) -> None:
         self._session = session
@@ -133,22 +134,22 @@ class Preemption:
             self._watcher = None
         self._ack_sent = False
 
-    def start(self):
+    def start(self) -> "Preemption":
         if self._watcher is not None:
             self._watcher.start()
+        return self
 
-    def close(self):
+    def close(self) -> None:
         if self._watcher is not None:
             self._watcher.close()
 
     def __enter__(self) -> "Preemption":
-        self.start()
-        return self
+        return self.start()
 
-    def __exit__(self, *_) -> None:
+    def __exit__(self, *_: Any) -> None:
         self.close()
 
-    def should_preempt(self, chief_only=False, auto_ack=True) -> bool:
+    def should_preempt(self, chief_only: bool = False, auto_ack: bool = True) -> bool:
         """
         Currently, we only support blocking behavior when checking should_preempt(), so it is not
         performant enough to call every batch.

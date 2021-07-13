@@ -1,5 +1,8 @@
 import enum
 import logging
+from typing import Iterator, Optional
+
+from determined.experimental import client
 
 log = logging.getLogger("generic")
 
@@ -13,7 +16,13 @@ class Unit(enum.Enum):
 
 
 class SearcherOp:
-    def __init__(self, session, trial_id, unit: Unit, length: int) -> None:
+    def __init__(
+        self,
+        session: client.Session,
+        trial_id: int,
+        unit: Unit,
+        length: int,
+    ) -> None:
         self._session = session
         self._trial_id = trial_id
         self._unit = unit
@@ -81,11 +90,11 @@ class SearcherOp:
 class AdvancedSearcher:
     """A namespaced API to make it clear which searcher-related things go to which API"""
 
-    def __init__(self, session, trial_id):
+    def __init__(self, session: client.Session, trial_id: int) -> None:
         self._session = session
         self._trial_id = trial_id
 
-    def _get_searcher_op(self):
+    def _get_searcher_op(self) -> Optional[SearcherOp]:
         log.info("_get_searcher_op()")
         r = self._session.get(f"/api/v1/trials/{self._trial_id}/searcher/operation")
         body = r.json()
@@ -97,7 +106,7 @@ class AdvancedSearcher:
             self._session, self._trial_id, unit=Unit(length["units"]), length=length["length"]
         )
 
-    def ops(self):
+    def ops(self) -> Iterator[SearcherOp]:
         """
         Iterate through all the ops this searcher has to offer.
 

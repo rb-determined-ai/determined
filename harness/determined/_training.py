@@ -1,8 +1,9 @@
 import enum
 import logging
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from determined.common.api import errors
+from determined.experimental import client
 
 log = logging.getLogger("generic")
 
@@ -18,7 +19,7 @@ class Training:
     Some training-related REST API wrappers.
     """
 
-    def __init__(self, session, trial_id, run_id, exp_id) -> None:
+    def __init__(self, session: client.Session, trial_id: int, run_id: int, exp_id: int) -> None:
         self._session = session
         self._trial_id = trial_id
         self._run_id = run_id
@@ -38,13 +39,13 @@ class Training:
     # XXX: include "window size" for training metrics too?  Or assume it's "since last report?"
     def report_training_metrics(
         self,
-        total_batches,
-        metrics,
+        total_batches: int,
+        metrics: Dict[str, Any],
         *,
-        batch_metrics=None,
-        total_records=None,
-        total_epochs=None,
-    ):
+        batch_metrics: Optional[List] = None,
+        total_records: Optional[int] = None,
+        total_epochs: Optional[int] = None,
+    ) -> None:
         body = {
             "trial_run_id": self._run_id,
             "total_batches": total_batches,
@@ -61,8 +62,13 @@ class Training:
 
     # XXX: num_records
     def report_validation_metrics(
-        self, total_batches, metrics, total_records=None, total_epochs=None
-    ):
+        self,
+        total_batches: int,
+        metrics: Dict[str, Any],
+        *,
+        total_records: Optional[int] = None,
+        total_epochs: Optional[int] = None,
+    ) -> None:
         body = {
             "trial_run_id": self._run_id,
             "total_batches": total_batches,
@@ -80,7 +86,7 @@ class Training:
         log.info(f"report_early_exit({reason})")
         self._session.post(f"/api/v1/trials/{self._trial_id}/early_exit", body=body)
 
-    def get_experiment_best_validation(self) -> float:
+    def get_experiment_best_validation(self) -> Optional[float]:
         log.info("get_experiment_best_validation()")
         try:
             r = self._session.get(
@@ -89,4 +95,4 @@ class Training:
         except errors.NotFoundException:
             # 404 means 'no validations yet'.
             return None
-        return r.json()["metric"]
+        return float(r.json()["metric"])

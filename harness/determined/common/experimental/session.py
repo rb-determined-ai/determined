@@ -24,7 +24,7 @@ class Session:
         method: str,
         path: str,
         params: Optional[Dict[str, Any]],
-        body: Optional[Dict[str, Any]],
+        body: Any,
         headers: Optional[Dict[str, Any]],
         timeout: Optional[int],
     ) -> requests.Response:
@@ -44,7 +44,6 @@ class Session:
         self,
         path: str,
         params: Optional[Dict[str, Any]] = None,
-        body: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, Any]] = None,
         timeout: Optional[int] = None,
     ) -> requests.Response:
@@ -54,7 +53,6 @@ class Session:
         self,
         path: str,
         params: Optional[Dict[str, Any]] = None,
-        body: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, Any]] = None,
         timeout: Optional[int] = None,
     ) -> requests.Response:
@@ -64,7 +62,7 @@ class Session:
         self,
         path: str,
         params: Optional[Dict[str, Any]] = None,
-        body: Optional[Dict[str, Any]] = None,
+        body: Any = None,
         headers: Optional[Dict[str, Any]] = None,
         timeout: Optional[int] = None,
     ) -> requests.Response:
