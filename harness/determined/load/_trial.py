@@ -1,10 +1,10 @@
 import importlib
 import logging
 import sys
-from typing import Type, cast
+from typing import Optional, Type, cast
 
 import determined as det
-from determined import horovod, load
+from determined import horovod, load, workload
 from determined.common import check
 
 
@@ -68,6 +68,7 @@ def load_trial(
     env: det.EnvContext,
     rendezvous_info: det.RendezvousInfo,
     hvd_config: horovod.HorovodContext,
+    workloads: Optional[workload.Stream] = None,
 ) -> det.TrialController:
     # Step 1: Validate model definition.
     controller_class = trial_class.trial_controller_class
@@ -99,6 +100,7 @@ def load_trial(
         env=env,
         rendezvous_info=rendezvous_info,
         hvd_config=hvd_config,
+        workloads=workloads,
     )
 
 

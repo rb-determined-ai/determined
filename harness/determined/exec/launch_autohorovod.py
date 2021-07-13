@@ -82,7 +82,7 @@ def main() -> None:
     det_cluster_id = os.environ["DET_CLUSTER_ID"]
     det_task_token = os.environ["DET_TASK_TOKEN"]
     trial_seed = int(os.environ["DET_TRIAL_SEED"])
-    task_run_id = os.environ["DET_TASK_RUN_ID"]
+    task_run_id = int(os.environ["DET_TASK_RUN_ID"])
 
     container_gpus = gpu.get_gpu_uuids_and_validate(use_gpu, slot_ids)
 

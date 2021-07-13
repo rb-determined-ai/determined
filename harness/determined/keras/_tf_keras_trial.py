@@ -245,6 +245,7 @@ class TFKerasTrialController(det.TrialController):
         env: det.EnvContext,
         rendezvous_info: det.RendezvousInfo,
         hvd_config: horovod.HorovodContext,
+        workloads: Optional[workload.Stream] = None,
     ) -> det.TrialController:
         check.is_instance(
             context, keras.TFKerasTrialContext, "TFKerasTrialController needs a TFKerasTrialContext"
@@ -286,6 +287,7 @@ class TFKerasTrialController(det.TrialController):
             env,
             rendezvous_info,
             hvd_config,
+            workloads,
         )
 
     def __init__(
@@ -348,10 +350,11 @@ class TFKerasTrialController(det.TrialController):
         self.train_workload_len = 0
         self.test_inputs = 0
 
-        session = experimental.Session(None, None, None, certs.cli_cert)
-        self.workloads = layers.make_compatibility_workloads(
-            session, self.env, self.context.distributed
-        )
+        if self.workloads is None:
+            session = experimental.Session(None, None, None, certs.cli_cert)
+            self.workloads = layers.make_compatibility_workloads(
+                session, self.env, self.context.distributed
+            )
 
     def _check_training_data(self) -> None:
         cacheable_used = self.context.experimental.get_train_cacheable().is_decorator_used()
@@ -743,6 +746,7 @@ class TFKerasTrialController(det.TrialController):
         return metrics
 
     def _control_loop(self) -> None:
+        assert self.workloads is not None
         for wkld, response_func in self.workloads:
             start_time = self._generic._current_timestamp()
             logging.debug(f"Received wkld {wkld.kind}.")

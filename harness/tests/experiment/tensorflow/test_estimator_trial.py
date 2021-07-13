@@ -8,7 +8,6 @@ import tensorflow as tf
 
 import determined as det
 from determined import workload
-from determined.exec import harness
 from tests.experiment import utils  # noqa: I100
 from tests.experiment.fixtures import estimator_linear_model, estimator_xor_model
 
@@ -34,6 +33,7 @@ def xor_trial_controller(request):
         exp_config: Optional[Dict] = None,
         checkpoint_dir: Optional[str] = None,
         latest_checkpoint: Optional[Dict[str, Any]] = None,
+        initial_total_batches: int = 0,
     ) -> det.TrialController:
         return utils.make_trial_controller_from_trial_implementation(
             trial_class=request.param,
@@ -44,6 +44,7 @@ def xor_trial_controller(request):
             trial_seed=325,
             checkpoint_dir=checkpoint_dir,
             latest_checkpoint=latest_checkpoint,
+            initial_total_batches=initial_total_batches,
         )
 
     return _xor_trial_controller
@@ -58,12 +59,6 @@ class TestXORTrial:
             "optimizer": "sgd",
             "shuffle": False,
         }
-
-    def teardown_method(self) -> None:
-        # Cleanup leftover environment variable state.
-        for key in harness.ENVIRONMENT_VARIABLE_KEYS:
-            if key in os.environ:
-                del os.environ[key]
 
     def test_xor_training(self, xor_trial_controller: Callable) -> None:
         def make_workloads() -> workload.Stream:
@@ -99,6 +94,7 @@ class TestXORTrial:
     def test_checkpointing(self, tmp_path: Path, xor_trial_controller: Callable) -> None:
         checkpoint_dir = str(tmp_path.joinpath("checkpoint"))
         latest_checkpoint = None
+        initial_total_batches = 0
         old_loss = -1
 
         def make_workloads_1() -> workload.Stream:
@@ -112,8 +108,9 @@ class TestXORTrial:
 
             interceptor = workload.WorkloadResponseInterceptor()
             yield from interceptor.send(workload.checkpoint_workload())
-            nonlocal latest_checkpoint
+            nonlocal latest_checkpoint, initial_total_batches
             latest_checkpoint = interceptor.metrics_result()["metrics"].__json__()
+            initial_total_batches = trainer.get_total_batches()
 
             yield workload.terminate_workload(), workload.ignore_workload_response
 
@@ -145,6 +142,7 @@ class TestXORTrial:
             scheduling_unit=10,
             checkpoint_dir=checkpoint_dir,
             latest_checkpoint=latest_checkpoint,
+            initial_total_batches=initial_total_batches,
         )
         controller.run()
 
@@ -194,6 +192,7 @@ class TestXORTrial:
             workloads: workload.Stream,
             checkpoint_dir: Optional[str] = None,
             latest_checkpoint: Optional[Dict[str, Any]] = None,
+            initial_total_batches: int = 0,
         ) -> det.TrialController:
             hparams = {**self.hparams, "optimizer": "adam"}
             return xor_trial_controller(
@@ -201,6 +200,7 @@ class TestXORTrial:
                 workloads,
                 checkpoint_dir=checkpoint_dir,
                 latest_checkpoint=latest_checkpoint,
+                initial_total_batches=initial_total_batches,
             )
 
         utils.checkpointing_and_restoring_test(make_trial_controller_fn, tmp_path)
@@ -240,6 +240,7 @@ class TestXORTrial:
     def test_custom_hook(self, tmp_path: Path) -> None:
         checkpoint_dir = str(tmp_path.joinpath("checkpoint"))
         latest_checkpoint = None
+        initial_total_batches = 0
 
         def make_workloads() -> workload.Stream:
             trainer = utils.TrainAndValidate()
@@ -248,8 +249,9 @@ class TestXORTrial:
 
             interceptor = workload.WorkloadResponseInterceptor()
             yield from interceptor.send(workload.checkpoint_workload())
-            nonlocal latest_checkpoint
+            nonlocal latest_checkpoint, initial_total_batches
             latest_checkpoint = interceptor.metrics_result()["metrics"].__json__()
+            initial_total_batches = trainer.get_total_batches()
 
             yield workload.terminate_workload(), workload.ignore_workload_response
 
@@ -274,6 +276,7 @@ class TestXORTrial:
             scheduling_unit=5,
             checkpoint_dir=checkpoint_dir,
             latest_checkpoint=latest_checkpoint,
+            initial_total_batches=initial_total_batches,
         )
         controller.run()
         verify_callback(os.path.join(checkpoint_dir, latest_checkpoint["uuid"]), checkpoint_num=2)
@@ -326,12 +329,6 @@ class TestLinearTrial:
             "learning_rate": 0.0001,
             "global_batch_size": 4,
         }
-
-    def teardown_method(self) -> None:
-        # Cleanup leftover environment variable state.
-        for key in harness.ENVIRONMENT_VARIABLE_KEYS:
-            if key in os.environ:
-                del os.environ[key]
 
     def test_custom_reducer(self) -> None:
         def make_workloads() -> workload.Stream:

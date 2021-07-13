@@ -155,9 +155,9 @@ def test_one_batch(
         controller = load.load_trial(
             trial_class=trial_class,
             env=env,
-            workloads=workloads,
             rendezvous_info=rendezvous_info,
             hvd_config=hvd_config,
+            workloads=workloads,
         )
         controller.run()
         logging.info(

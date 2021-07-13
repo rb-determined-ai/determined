@@ -104,9 +104,7 @@ class DeterminedControlHook(estimator.RunHook):
     ) -> tf.estimator.SessionRunArgs:
         # On resuming from checkpoint, _current_global_step is None for one batch
         if self._current_global_step is None:
-            self.prof.update_batch_idx(
-                self.estimator_trial_controller.env.initial_total_batches
-            )
+            self.prof.update_batch_idx(self.estimator_trial_controller.env.initial_total_batches)
         else:
             self.prof.update_batch_idx(self._current_global_step)
         return tf.estimator.SessionRunArgs(
@@ -290,6 +288,7 @@ class DeterminedControlHook(estimator.RunHook):
     def control_loop(self) -> None:
         _generic = self.estimator_trial_controller._generic
 
+        assert self.estimator_trial_controller.workloads is not None
         for wkld, response_func in self.estimator_trial_controller.workloads:
             logging.debug(f"Received wkld {wkld.kind}.")
             start_time = _generic._current_timestamp()
@@ -421,10 +420,11 @@ class EstimatorTrialController(det.TrialController):
 
         self._init_model()
 
-        session = experimental.Session(None, None, None, certs.cli_cert)
-        self.workloads = layers.make_compatibility_workloads(
-            session, self.env, self.context.distributed
-        )
+        if self.workloads is None:
+            session = experimental.Session(None, None, None, certs.cli_cert)
+            self.workloads = layers.make_compatibility_workloads(
+                session, self.env, self.context.distributed
+            )
 
     @staticmethod
     def pre_execute_hook(env: det.EnvContext, hvd_config: horovod.HorovodContext) -> None:

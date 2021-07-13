@@ -11,8 +11,8 @@ class Session:
         self,
         master: Optional[str],
         user: Optional[str],
-        auth: authentication.Authentication,
-        cert: certs.Cert,
+        auth: Optional[authentication.Authentication],
+        cert: Optional[certs.Cert],
     ) -> None:
         self._master = master or util.get_default_master_address()
         self._user = user
@@ -44,6 +44,7 @@ class Session:
         self,
         path: str,
         params: Optional[Dict[str, Any]] = None,
+        body: Any = None,
         headers: Optional[Dict[str, Any]] = None,
         timeout: Optional[int] = None,
     ) -> requests.Response:
@@ -53,6 +54,7 @@ class Session:
         self,
         path: str,
         params: Optional[Dict[str, Any]] = None,
+        body: Any = None,
         headers: Optional[Dict[str, Any]] = None,
         timeout: Optional[int] = None,
     ) -> requests.Response:
@@ -72,7 +74,7 @@ class Session:
         self,
         path: str,
         params: Optional[Dict[str, Any]] = None,
-        body: Optional[Dict[str, Any]] = None,
+        body: Any = None,
         headers: Optional[Dict[str, Any]] = None,
         timeout: Optional[int] = None,
     ) -> requests.Response:
@@ -82,7 +84,7 @@ class Session:
         self,
         path: str,
         params: Optional[Dict[str, Any]] = None,
-        body: Optional[Dict[str, Any]] = None,
+        body: Any = None,
         headers: Optional[Dict[str, Any]] = None,
         timeout: Optional[int] = None,
     ) -> requests.Response:

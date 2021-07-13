@@ -2,8 +2,6 @@ import sys
 from typing import Any, Generator, Optional, Tuple
 
 import determined as det
-
-# XXX: clean up these paths
 from determined import _checkpointing, _preemption, _searcher, _training, workload
 from determined.common import check
 from determined.experimental import client
@@ -417,7 +415,9 @@ class WorkloadSequencer(workload.Source):
 
 
 def make_compatibility_workloads(
-    session: client.Session, env: det.EnvContext, dist: det.DistributedContext,
+    session: client.Session,
+    env: det.EnvContext,
+    dist: det.DistributedContext,
 ) -> workload.Stream:
     """
     make_compatibility_workloads will create a stream of workloads to allow a pre-push-architecture

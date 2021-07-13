@@ -50,10 +50,11 @@ class PyTorchTrialController(det.TrialController):
         self.validation_loader = None  # type: Optional[torch.utils.data.DataLoader]
         self._set_data_loaders()
 
-        session = experimental.Session(None, None, None, certs.cli_cert)
-        self.workloads = layers.make_compatibility_workloads(
-            session, self.env, self.context.distributed
-        )
+        if self.workloads is None:
+            session = experimental.Session(None, None, None, certs.cli_cert)
+            self.workloads = layers.make_compatibility_workloads(
+                session, self.env, self.context.distributed
+            )
 
     @staticmethod
     def pre_execute_hook(env: det.EnvContext, hvd_config: horovod.HorovodContext) -> None:
@@ -161,6 +162,7 @@ class PyTorchTrialController(det.TrialController):
             del self.training_iterator
 
     def _run(self) -> None:
+        assert self.workloads is not None
         for w, response_func in self.workloads:
             start_time = self._generic._current_timestamp()
 

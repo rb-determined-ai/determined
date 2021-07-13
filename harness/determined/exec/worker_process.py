@@ -36,7 +36,7 @@ def main() -> int:
         while True:
             try:
                 ret = p.wait(timeout=60)
-                pid_client.close(graceful=(ret==0))
+                pid_client.close(graceful=(ret == 0))
                 return ret
             except subprocess.TimeoutExpired:
                 pid_client.keep_alive()

@@ -1,9 +1,9 @@
 import abc
 import logging
-from typing import Any
+from typing import Any, Optional
 
 import determined as det
-from determined import horovod, profiler
+from determined import horovod, profiler, workload
 from determined._rendezvous_info import RendezvousInfo
 from determined.common import check
 from determined.horovod import hvd
@@ -21,11 +21,14 @@ class TrialController(metaclass=abc.ABCMeta):
         env: det.EnvContext,
         rendezvous_info: RendezvousInfo,
         hvd_config: horovod.HorovodContext,
+        workloads: Optional[workload.Stream] = None,
     ) -> None:
         self.context = context
         self.env = env
         self.rendezvous_info = rendezvous_info
         self.hvd_config = hvd_config
+        # The only time that workloads should be non-None here is unit tests or test mode.
+        self.workloads = workloads
 
         self.prof = profiler.ProfilerAgent.from_env(
             env,
@@ -68,6 +71,7 @@ class TrialController(metaclass=abc.ABCMeta):
         env: det.EnvContext,
         rendezvous_info: RendezvousInfo,
         hvd_config: horovod.HorovodContext,
+        workloads: Optional[workload.Stream] = None,
     ) -> "TrialController":
         """
         Create a TrialController from an instantiated framework-matched Trial.
