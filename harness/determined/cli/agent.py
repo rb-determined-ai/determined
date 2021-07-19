@@ -131,7 +131,7 @@ def patch_agent(enabled: bool) -> Callable[[argparse.Namespace], None]:
             headers = {"Content-Type": "application/merge-patch+json"}
             payload = {"enabled": enabled}
 
-            api.patch(args.master, path, body=payload, headers=headers)
+            api.patch(args.master, path, json=payload, headers=headers)
             status = "Disabled" if not enabled else "Enabled"
             print("{} agent {}".format(status, agent_id))
 
@@ -145,7 +145,7 @@ def patch_slot(enabled: bool) -> Callable[[argparse.Namespace], None]:
         headers = {"Content-Type": "application/merge-patch+json"}
         payload = {"enabled": enabled}
 
-        api.patch(args.master, path, body=payload, headers=headers)
+        api.patch(args.master, path, json=payload, headers=headers)
         status = "Disabled" if not enabled else "Enabled"
         print("{} slot {} of agent {}".format(status, args.slot_id, args.agent_id))
 
