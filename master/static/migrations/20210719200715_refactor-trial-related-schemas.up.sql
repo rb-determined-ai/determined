@@ -19,6 +19,12 @@ ALTER TABLE public.trials
     ADD COLUMN run_id integer NOT NULL DEFAULT 0,
     ADD COLUMN restarts integer NOT NULL DEFAULT 0;
 
+ALTER TABLE public.steps
+    ADD COLUMN computed_records integer NULL;
+
+ALTER TABLE public.validations
+    ADD COLUMN computed_records integer NULL;
+
 DROP TABLE public.trial_snapshots;
 
 DROP TABLE public.runs;

@@ -3,9 +3,8 @@
 package mocks
 
 import (
-	mock "github.com/stretchr/testify/mock"
-
 	actor "github.com/determined-ai/determined/master/pkg/actor"
+	mock "github.com/stretchr/testify/mock"
 
 	sproto "github.com/determined-ai/determined/master/internal/sproto"
 

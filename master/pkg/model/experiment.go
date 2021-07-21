@@ -335,16 +335,17 @@ func NewTrial(
 
 // Step represents a row from the `steps` table.
 type Step struct {
-	TrialID      int        `db:"trial_id"`
-	TrialRunID   int        `db:"trial_run_id"`
-	ID           int        `db:"id"`
-	TotalBatches int        `db:"total_batches"`
-	TotalRecords int        `db:"total_records"`
-	TotalEpochs  float32    `db:"total_epochs" json:"-"`
-	State        State      `db:"state"`
-	StartTime    time.Time  `db:"start_time"`
-	EndTime      *time.Time `db:"end_time"`
-	Metrics      JSONObj    `db:"metrics"`
+	TrialID         int        `db:"trial_id"`
+	TrialRunID      int        `db:"trial_run_id"`
+	ID              int        `db:"id"`
+	TotalBatches    int        `db:"total_batches"`
+	TotalRecords    int        `db:"total_records"`
+	TotalEpochs     float32    `db:"total_epochs" json:"-"`
+	ComputedRecords int        `db:"computed_records"`
+	State           State      `db:"state"`
+	StartTime       time.Time  `db:"start_time"`
+	EndTime         *time.Time `db:"end_time"`
+	Metrics         JSONObj    `db:"metrics"`
 }
 
 // NewStep creates a new step in the active state.
@@ -377,16 +378,17 @@ func (s *Step) IsNew() bool {
 
 // Validation represents a row from the `validations` table.
 type Validation struct {
-	ID           int        `db:"id" json:"id"`
-	TrialID      int        `db:"trial_id" json:"trial_id"`
-	TrialRunID   int        `db:"trial_run_id" json:"-"`
-	TotalBatches int        `db:"total_batches" json:"-"`
-	TotalRecords int        `db:"total_records" json:"-"`
-	TotalEpochs  float32    `db:"total_epochs" json:"-"`
-	State        State      `db:"state" json:"state"`
-	StartTime    time.Time  `db:"start_time" json:"start_time"`
-	EndTime      *time.Time `db:"end_time" json:"end_time"`
-	Metrics      JSONObj    `db:"metrics" json:"metrics"`
+	ID              int        `db:"id" json:"id"`
+	TrialID         int        `db:"trial_id" json:"trial_id"`
+	TrialRunID      int        `db:"trial_run_id" json:"-"`
+	TotalBatches    int        `db:"total_batches" json:"-"`
+	TotalRecords    int        `db:"total_records" json:"-"`
+	TotalEpochs     float32    `db:"total_epochs" json:"-"`
+	ComputedRecords int        `db:"computed_records" json:"-"`
+	State           State      `db:"state" json:"state"`
+	StartTime       time.Time  `db:"start_time" json:"start_time"`
+	EndTime         *time.Time `db:"end_time" json:"end_time"`
+	Metrics         JSONObj    `db:"metrics" json:"metrics"`
 }
 
 // NewValidation creates a new validation in the active state.

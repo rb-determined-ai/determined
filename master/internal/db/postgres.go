@@ -1593,10 +1593,10 @@ WHERE trial_id = $1`, m.TrialId).Scan(&id); err != nil {
 		if _, err := tx.NamedExecContext(ctx, `
 INSERT INTO raw_steps
 	(trial_id, id, trial_run_id, state, start_time,
-	 end_time, metrics, total_batches, total_records, total_epochs)
+	 end_time, metrics, total_batches, total_records, total_epochs, computed_records)
 VALUES
 	(:trial_id, :id, :trial_run_id, :state, :start_time,
-	 now(), :metrics, :total_batches, :total_records, :total_epochs)
+	 now(), :metrics, :total_batches, :total_records, :total_epochs, :computed_records)
 `, model.Step{
 			TrialID:    int(m.TrialId),
 			ID:         id,
@@ -1607,9 +1607,10 @@ VALUES
 				"avg_metrics":   m.Metrics,
 				"batch_metrics": m.BatchMetrics,
 			},
-			TotalBatches: int(m.TotalBatches),
-			TotalRecords: int(m.TotalRecords),
-			TotalEpochs:  m.TotalEpochs,
+			TotalBatches:    int(m.TotalBatches),
+			TotalRecords:    int(m.TotalRecords),
+			TotalEpochs:     m.TotalEpochs,
+			ComputedRecords: int(m.ComputedRecords),
 		}); err != nil {
 			return errors.Wrap(err, "inserting training metrics")
 		}
@@ -1652,10 +1653,10 @@ WHERE trial_id = $1
 		if _, err := tx.NamedExecContext(ctx, `
 INSERT INTO raw_validations
 	(trial_id, trial_run_id, state, start_time, end_time,
-	 metrics, total_batches, total_records, total_epochs)
+	 metrics, total_batches, total_records, total_epochs, computed_records)
 VALUES
 	(:trial_id, :trial_run_id, :state, :start_time, now(),
-	 :metrics, :total_batches, :total_records, :total_epochs)
+	 :metrics, :total_batches, :total_records, :total_epochs, :computed_records)
 `, model.Validation{
 			TrialID:    int(m.TrialId),
 			TrialRunID: int(m.TrialRunId),
@@ -1664,9 +1665,10 @@ VALUES
 			Metrics: map[string]interface{}{
 				"validation_metrics": m.Metrics,
 			},
-			TotalBatches: int(m.TotalBatches),
-			TotalRecords: int(m.TotalRecords),
-			TotalEpochs:  m.TotalEpochs,
+			TotalBatches:    int(m.TotalBatches),
+			TotalRecords:    int(m.TotalRecords),
+			TotalEpochs:     m.TotalEpochs,
+			ComputedRecords: int(m.ComputedRecords),
 		}); err != nil {
 			return errors.Wrap(err, "inserting validation metrics")
 		}
