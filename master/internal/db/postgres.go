@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/determined-ai/determined/master/internal/sproto"
-
 	"github.com/determined-ai/determined/master/pkg/ptrs"
 
 	"github.com/golang-migrate/migrate"
@@ -113,6 +111,25 @@ func (db *PgDB) namedGet(dest interface{}, query string, arg interface{}) error 
 // namedExecOne is a convenience method for a NamedExec that should affect only one row.
 func (db *PgDB) namedExecOne(query string, arg interface{}) error {
 	res, err := db.sql.NamedExec(query, arg)
+	if err != nil {
+		return errors.Wrapf(err, "error in query %v \narg %v", query, arg)
+	}
+	num, err := res.RowsAffected()
+	if err != nil {
+		return errors.Wrapf(
+			err,
+			"error checking rows affected for query %v\n arg %v",
+			query, arg)
+	}
+	if num != 1 {
+		return errors.Errorf("error: %v rows affected on query %v \narg %v", num, query, arg)
+	}
+	return nil
+}
+
+// namedExecOne is a convenience method for a NamedExec that should affect only one row.
+func namedExecOne(tx *sqlx.Tx, query string, arg interface{}) error {
+	res, err := tx.NamedExec(query, arg)
 	if err != nil {
 		return errors.Wrapf(err, "error in query %v \narg %v", query, arg)
 	}
@@ -1186,21 +1203,33 @@ FROM (
 
 // AddTrial adds the trial to the database and sets its ID.
 func (db *PgDB) AddTrial(trial *model.Trial) error {
-	if trial.ID != 0 {
-		return errors.Errorf("error adding a trial with non-zero id %v", trial.ID)
-	}
-	err := db.namedGet(&trial.ID, `
+	return db.withTransaction("add_trial", func(tx *sqlx.Tx) error {
+		if trial.ID != 0 {
+			return errors.Errorf("error adding a trial with non-zero id %v", trial.ID)
+		}
+		if err := db.namedGet(&trial.ID, `
 INSERT INTO trials
-  (request_id, experiment_id, state, start_time, end_time,
+  (task_id, request_id, experiment_id, state, start_time, end_time,
    hparams, warm_start_checkpoint_id, seed)
-VALUES (:request_id, :experiment_id, :state, :start_time,
+VALUES (:task_id, :request_id, :experiment_id, :state, :start_time,
         :end_time, :hparams, :warm_start_checkpoint_id, :seed)
-RETURNING id`, trial)
-	// Assume the foreign key constraint is handled by the database.
-	return errors.Wrapf(err, "error inserting trial %v", *trial)
+RETURNING id`, trial); err != nil {
+			// Assume the foreign key constraint is handled by the database.
+			return errors.Wrapf(err, "error inserting trial %v", *trial)
+		}
+
+		if _, err := db.sql.Exec(`
+INSERT INTO tasks
+    (task_id, task_type, start_time)
+VALUES
+	($1, $2, $3)`, trial.TaskID, model.TaskTypeTrial, time.Now().UTC()); err != nil {
+			return errors.Wrap(err, "inserting task")
+		}
+		return nil
+	})
 }
 
-// TrialByID looks up a trial by ID, returning an error if none exists.
+// TrialByID looks up a trial by AllocationID, returning an error if none exists.
 func (db *PgDB) TrialByID(id int) (*model.Trial, error) {
 	var trial model.Trial
 	err := db.query(`
@@ -1234,6 +1263,7 @@ func (db *PgDB) UpdateTrial(id int, newState model.State) error {
 	if err != nil {
 		return errors.Wrapf(err, "error finding trial %v to update", id)
 	}
+
 	if !model.TrialTransitions[trial.State][newState] {
 		return errors.Errorf("illegal transition %v -> %v for trial %v",
 			trial.State, newState, trial.ID)
@@ -1245,15 +1275,30 @@ func (db *PgDB) UpdateTrial(id int, newState model.State) error {
 		trial.EndTime = &now
 		toUpdate = append(toUpdate, "end_time")
 	}
-	err = db.namedExecOne(fmt.Sprintf(`
+
+	return db.withTransaction("update_trial", func(tx *sqlx.Tx) error {
+		// Only the trial actor updates this row, and it does so in a serialized
+		// fashion already, so this transaction is more a matter of atomicity.
+		if err := namedExecOne(tx, fmt.Sprintf(`
 UPDATE trials
 %v
-WHERE id = :id`, setClause(toUpdate)), trial)
-	if err != nil {
-		return errors.Wrapf(err, "error updating (%v) in trial %v",
-			strings.Join(toUpdate, ", "), id)
-	}
-	return nil
+WHERE id = :id`, setClause(toUpdate)), trial); err != nil {
+			return errors.Wrapf(err, "error updating (%v) in trial %v",
+				strings.Join(toUpdate, ", "), id)
+		}
+
+		if model.TerminalStates[newState] {
+			if _, err := tx.Exec(`
+UPDATE tasks
+SET end_time = $2
+WHERE task_id = $1
+`, trial.TaskID, time.Now().UTC()); err != nil {
+				return errors.Wrap(err, "completing task")
+			}
+		}
+
+		return nil
+	})
 }
 
 // UpdateTrialRunnerState updates a trial runner's state.
@@ -1446,39 +1491,7 @@ VALUES (
 	return nil
 }
 
-// AddTask persists a task.
-func (db *PgDB) AddTask(jobType model.JobType, jobTypeFkID int, taskID sproto.TaskID) error {
-	_, err := db.sql.Exec(`
-INSERT INTO tasks (job_type, job_type_fk_id, task_id)
-VALUES ($1, $2, $3)
-ON CONFLICT (job_type, job_type_fk_id, task_id)
-DO UPDATE SET start_time = now()`, jobType, jobTypeFkID, taskID)
-	return err
-}
-
-// CompleteTask completes a previously persisted task.
-func (db *PgDB) CompleteTask(jobType model.JobType, jobTypeFkID int, taskID sproto.TaskID) error {
-	_, err := db.sql.Exec(`
-UPDATE tasks
-SET end_time = now()
-WHERE job_type = $1
-  AND job_type_fk_id = $2
-  AND task_id = $3`, jobType, jobTypeFkID, taskID)
-	return err
-}
-
-// EndTasks completes all previously persisted tasks for a job.
-func (db *PgDB) EndTasks(jobType model.JobType, jobTypeFkID int) error {
-	_, err := db.sql.Exec(`
-UPDATE tasks
-SET end_time = now()
-WHERE job_type = $1
-  AND job_type_fk_id = $2
-  AND end_time IS NULL`, jobType, jobTypeFkID)
-	return err
-}
-
-// TrialRunIDAndRestarts returns the run ID and restart count for a trial.
+// TrialRunIDAndRestarts returns the run id and restart count for a trial.
 func (db *PgDB) TrialRunIDAndRestarts(trialID int) (int, int, error) {
 	var runID, restart int
 	if err := db.sql.QueryRowx(`
@@ -1787,15 +1800,8 @@ SELECT coalesce(greatest(
 	(SELECT max(end_time) FROM raw_steps WHERE trial_id = $1),
 	(SELECT max(end_time) FROM raw_validations WHERE trial_id = $1),
 	(SELECT max(end_time) FROM raw_checkpoints WHERE trial_id = $1),
-	(
-	    SELECT coalesce(tsk.start_time, t.start_time)
-		FROM trials t, tasks tsk
-		WHERE t.id = $1
-	      AND tsk.job_type = 'TRIAL'
-		  AND tsk.job_type_fk_id = t.id
-	    ORDER BY tsk.start_time DESC
-	    LIMIT 1
-	)), now())
+    (SELECT max(a.start_time) FROM allocations a, trials t WHERE a.task_id = t.task_id AND t.id = $1),
+    (SELECT max(tk.start_time) FROM tasks tk, trials t WHERE tk.task_id = t.task_id AND t.id = $1)), now())
 `, trialID).Scan(&endTime); err != nil {
 		return time.Time{}, errors.Wrap(err, "deriving start time")
 	}

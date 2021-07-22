@@ -298,7 +298,9 @@ func (e *Experiment) Transition(state State) (bool, error) {
 
 // Trial represents a row from the `trials` table.
 type Trial struct {
-	ID                    int        `db:"id"`
+	ID int `db:"id"`
+	// Uniquely identifies the trial task among all tasks.
+	TaskID                TaskID     `db:"task_id"`
 	RequestID             *RequestID `db:"request_id"`
 	ExperimentID          int        `db:"experiment_id"`
 	State                 State      `db:"state"`
@@ -312,6 +314,7 @@ type Trial struct {
 // NewTrial creates a new trial in the active state.  Note that the trial ID
 // will not be set.
 func NewTrial(
+	taskID TaskID,
 	requestID RequestID,
 	experimentID int,
 	hparams JSONObj,
@@ -323,6 +326,7 @@ func NewTrial(
 		warmStartCheckpointID = &warmStartCheckpoint.ID
 	}
 	return &Trial{
+		TaskID:                taskID,
 		RequestID:             &requestID,
 		ExperimentID:          experimentID,
 		State:                 ActiveState,
