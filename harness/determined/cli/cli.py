@@ -61,7 +61,8 @@ def list_tasks(args: Namespace) -> None:
 
     tasks = r.json()
     headers = [
-        "ID",
+        "Task ID",
+        "Allocation ID",
         "Name",
         "Slots Needed",
         "Registered Time",
@@ -71,7 +72,8 @@ def list_tasks(args: Namespace) -> None:
     ]
     values = [
         [
-            task["id"],
+            task["task_id"],
+            task["allocation_id"],
             task["name"],
             task["slots_needed"],
             render.format_time(task["registered_time"]),
