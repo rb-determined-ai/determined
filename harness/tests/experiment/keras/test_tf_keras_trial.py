@@ -137,7 +137,7 @@ class TestKerasTrial:
                     interceptor = workload.WorkloadResponseInterceptor()
                     yield from interceptor.send(workload.checkpoint_workload())
                     nonlocal latest_checkpoint, last_batch
-                    latest_checkpoint = interceptor.metrics_result()["metrics"].__json__()
+                    latest_checkpoint = interceptor.metrics_result()
                     # last_batch is unused, but can't be 0.
                     last_batch = 1
                     break
@@ -218,7 +218,7 @@ class TestKerasTrial:
             interceptor = workload.WorkloadResponseInterceptor()
             yield from interceptor.send(workload.checkpoint_workload())
             nonlocal latest_checkpoint, last_batch
-            latest_checkpoint = interceptor.metrics_result()["metrics"].__json__()
+            latest_checkpoint = interceptor.metrics_result()
             last_batch = trainer.get_total_batches()
 
         controller = xor_trial_controller(

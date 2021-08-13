@@ -166,7 +166,7 @@ class TestPyTorchTrial:
             interceptor = workload.WorkloadResponseInterceptor()
             yield from interceptor.send(workload.checkpoint_workload())
             nonlocal latest_checkpoint, last_batch
-            latest_checkpoint = interceptor.metrics_result()["metrics"].__json__()
+            latest_checkpoint = interceptor.metrics_result()
             last_batch = trainer.get_total_batches()
 
         controller1 = utils.make_trial_controller_from_trial_implementation(
@@ -336,7 +336,7 @@ class TestPyTorchTrial:
             interceptor = workload.WorkloadResponseInterceptor()
             yield from interceptor.send(workload.checkpoint_workload())
             nonlocal latest_checkpoint, last_batch
-            latest_checkpoint = interceptor.metrics_result()["metrics"].__json__()
+            latest_checkpoint = interceptor.metrics_result()
             last_batch = 1
             assert controller.trial.counter.__dict__ == {
                 "validation_steps_started": 1,
