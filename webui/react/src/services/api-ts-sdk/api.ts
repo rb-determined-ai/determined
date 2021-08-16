@@ -2782,6 +2782,34 @@ export interface V1LogoutResponse {
 }
 
 /**
+ * Mark some reservation as a daemon.
+ * @export
+ * @interface V1MarkAllocationReservationDaemonRequest
+ */
+export interface V1MarkAllocationReservationDaemonRequest {
+    /**
+     * The allocation ID for the reservation.
+     * @type {string}
+     * @memberof V1MarkAllocationReservationDaemonRequest
+     */
+    allocationId: string;
+    /**
+     * The container ID for the reservation.
+     * @type {string}
+     * @memberof V1MarkAllocationReservationDaemonRequest
+     */
+    containerId: string;
+}
+
+/**
+ * Response to MarkAllocationReservationDaemonRequest.
+ * @export
+ * @interface V1MarkAllocationReservationDaemonResponse
+ */
+export interface V1MarkAllocationReservationDaemonResponse {
+}
+
+/**
  * Response to MasterLogsRequest.
  * @export
  * @interface V1MasterLogsResponse
@@ -9385,6 +9413,58 @@ export const InternalApiFetchParamCreator = function (configuration?: Configurat
         },
         /**
          * 
+         * @summary Mark the given reservation (container, pod, etc) within an allocation as a daemon reservation. In the exit of a successful exit, Determined will wait for all reservations to exit - unless they are marked as daemon reservations, in which case Determined will clean them up regardless of exit status after all non-daemon reservations have exited.
+         * @param {string} allocationId The allocation ID for the reservation.
+         * @param {string} containerId The container ID for the reservation.
+         * @param {V1MarkAllocationReservationDaemonRequest} body 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        determinedMarkAllocationReservationDaemon(allocationId: string, containerId: string, body: V1MarkAllocationReservationDaemonRequest, options: any = {}): FetchArgs {
+            // verify required parameter 'allocationId' is not null or undefined
+            if (allocationId === null || allocationId === undefined) {
+                throw new RequiredError('allocationId','Required parameter allocationId was null or undefined when calling determinedMarkAllocationReservationDaemon.');
+            }
+            // verify required parameter 'containerId' is not null or undefined
+            if (containerId === null || containerId === undefined) {
+                throw new RequiredError('containerId','Required parameter containerId was null or undefined when calling determinedMarkAllocationReservationDaemon.');
+            }
+            // verify required parameter 'body' is not null or undefined
+            if (body === null || body === undefined) {
+                throw new RequiredError('body','Required parameter body was null or undefined when calling determinedMarkAllocationReservationDaemon.');
+            }
+            const localVarPath = `/api/v1/allocations/{allocationId}/containers/{containerId}/daemon`
+                .replace(`{${"allocationId"}}`, encodeURIComponent(String(allocationId)))
+                .replace(`{${"containerId"}}`, encodeURIComponent(String(containerId)));
+            const localVarUrlObj = url.parse(localVarPath, true);
+            const localVarRequestOptions = Object.assign({ method: 'POST' }, options);
+            const localVarHeaderParameter = {} as any;
+            const localVarQueryParameter = {} as any;
+
+            // authentication BearerToken required
+            if (configuration && configuration.apiKey) {
+                const localVarApiKeyValue = typeof configuration.apiKey === 'function'
+					? configuration.apiKey("Authorization")
+					: configuration.apiKey;
+                localVarHeaderParameter["Authorization"] = localVarApiKeyValue;
+            }
+
+            localVarHeaderParameter['Content-Type'] = 'application/json';
+
+            localVarUrlObj.query = Object.assign({}, localVarUrlObj.query, localVarQueryParameter, options.query);
+            // fix override query string Detail: https://stackoverflow.com/a/7517673/1077943
+            delete localVarUrlObj.search;
+            localVarRequestOptions.headers = Object.assign({}, localVarHeaderParameter, options.headers);
+            const needsSerialization = (<any>"V1MarkAllocationReservationDaemonRequest" !== "string") || localVarRequestOptions.headers['Content-Type'] === 'application/json';
+            localVarRequestOptions.body =  needsSerialization ? JSON.stringify(body || {}) : (body || "");
+
+            return {
+                url: url.format(localVarUrlObj),
+                options: localVarRequestOptions,
+            };
+        },
+        /**
+         * 
          * @summary Get the milestones (in batches processed) at which a metric is recorded by an experiment.
          * @param {number} experimentId The id of the experiment.
          * @param {string} metricName A metric name.
@@ -10180,6 +10260,27 @@ export const InternalApiFp = function(configuration?: Configuration) {
         },
         /**
          * 
+         * @summary Mark the given reservation (container, pod, etc) within an allocation as a daemon reservation. In the exit of a successful exit, Determined will wait for all reservations to exit - unless they are marked as daemon reservations, in which case Determined will clean them up regardless of exit status after all non-daemon reservations have exited.
+         * @param {string} allocationId The allocation ID for the reservation.
+         * @param {string} containerId The container ID for the reservation.
+         * @param {V1MarkAllocationReservationDaemonRequest} body 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        determinedMarkAllocationReservationDaemon(allocationId: string, containerId: string, body: V1MarkAllocationReservationDaemonRequest, options?: any): (fetch?: FetchAPI, basePath?: string) => Promise<V1MarkAllocationReservationDaemonResponse> {
+            const localVarFetchArgs = InternalApiFetchParamCreator(configuration).determinedMarkAllocationReservationDaemon(allocationId, containerId, body, options);
+            return (fetch: FetchAPI = portableFetch, basePath: string = BASE_PATH) => {
+                return fetch(basePath + localVarFetchArgs.url, localVarFetchArgs.options).then((response) => {
+                    if (response.status >= 200 && response.status < 300) {
+                        return response.json();
+                    } else {
+                        throw response;
+                    }
+                });
+            };
+        },
+        /**
+         * 
          * @summary Get the milestones (in batches processed) at which a metric is recorded by an experiment.
          * @param {number} experimentId The id of the experiment.
          * @param {string} metricName A metric name.
@@ -10535,6 +10636,18 @@ export const InternalApiFactory = function (configuration?: Configuration, fetch
         },
         /**
          * 
+         * @summary Mark the given reservation (container, pod, etc) within an allocation as a daemon reservation. In the exit of a successful exit, Determined will wait for all reservations to exit - unless they are marked as daemon reservations, in which case Determined will clean them up regardless of exit status after all non-daemon reservations have exited.
+         * @param {string} allocationId The allocation ID for the reservation.
+         * @param {string} containerId The container ID for the reservation.
+         * @param {V1MarkAllocationReservationDaemonRequest} body 
+         * @param {*} [options] Override http request option.
+         * @throws {RequiredError}
+         */
+        determinedMarkAllocationReservationDaemon(allocationId: string, containerId: string, body: V1MarkAllocationReservationDaemonRequest, options?: any) {
+            return InternalApiFp(configuration).determinedMarkAllocationReservationDaemon(allocationId, containerId, body, options)(fetch, basePath);
+        },
+        /**
+         * 
          * @summary Get the milestones (in batches processed) at which a metric is recorded by an experiment.
          * @param {number} experimentId The id of the experiment.
          * @param {string} metricName A metric name.
@@ -10810,6 +10923,20 @@ export class InternalApi extends BaseAPI {
      */
     public determinedGetTelemetry(options?: any) {
         return InternalApiFp(this.configuration).determinedGetTelemetry(options)(this.fetch, this.basePath);
+    }
+
+    /**
+     * 
+     * @summary Mark the given reservation (container, pod, etc) within an allocation as a daemon reservation. In the exit of a successful exit, Determined will wait for all reservations to exit - unless they are marked as daemon reservations, in which case Determined will clean them up regardless of exit status after all non-daemon reservations have exited.
+     * @param {string} allocationId The allocation ID for the reservation.
+     * @param {string} containerId The container ID for the reservation.
+     * @param {V1MarkAllocationReservationDaemonRequest} body 
+     * @param {*} [options] Override http request option.
+     * @throws {RequiredError}
+     * @memberof InternalApi
+     */
+    public determinedMarkAllocationReservationDaemon(allocationId: string, containerId: string, body: V1MarkAllocationReservationDaemonRequest, options?: any) {
+        return InternalApiFp(this.configuration).determinedMarkAllocationReservationDaemon(allocationId, containerId, body, options)(this.fetch, this.basePath);
     }
 
     /**
