@@ -36,7 +36,7 @@ if __name__ == "__main__":
         sys.exit(
             pid_server.run_subprocess(
                 cmd=[args.cmd] + args.cmd_args,
-                on_fail=args.on_fail,
-                on_exit=args.on_exit,
+                on_fail=on_fail,
+                on_exit=on_exit,
             ),
         )
