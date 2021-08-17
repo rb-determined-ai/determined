@@ -69,9 +69,10 @@ def main() -> int:
     hparams = simplejson.loads(os.environ["DET_HPARAMS"])
 
     # TODO: refactor websocket, data_layer, and profiling to to not use the cli_cert.
-    certs.cli_cert = certs.default_load(
+    cert = certs.default_load(
         master_url=f"http{'s' if use_tls else ''}://{master_addr}:{master_port}"
     )
+    certs.cli_cert = cert
 
     with open(os.environ["DET_LATEST_CHECKPOINT"], "r") as f:
         latest_checkpoint = json.load(f)
@@ -157,14 +158,26 @@ def main() -> int:
     # This is so that machine-specific variables, like DET_CONTAINER_ID, are correct on every
     # worker, even when the worker is on a different machine than where horovodrun was called.
     # Otherwise the horovodrun machine will blindly duplicate its own variables everywhere.
-    # XXX: I would like to do this master-side.
+    # TODO: It would be better to do this master-side.
     wpc = layers.WorkerProcessContext(hvd_config, rendezvous_info, env)
     wpc_path = f"/tmp/worker_process_context{env.allocation_id}"
     wpc.to_file(pathlib.Path(wpc_path))
 
     if rendezvous_info.rank > 0:
-        # Non-chief machines just run sshd.  Wrap it in a pid_server to ensure that we can't hang if
-        # a worker fails.
+        # Non-chief machines just run sshd.
+
+        # Mark sshd containers as daemon containers that the master should kill when all non-daemon
+        # contiainers (horovodrun, in this case) have exited.
+        r = api.get(
+            master_url,
+            path=f"/api/v1/allocations/{allocation_id}/containers/{container_id}/daemon",
+            cert=cert,
+        )
+
+        # Wrap it in a pid_server to ensure that we can't hang if a worker fails.
+        # TODO: After the upstream horovod bugfix (github.com/horovod/horovod/pull/3060) is in a
+        # widely-used release of horovod, we should remove this pid_server layer, which just adds
+        # unnecessary complexity.
         pid_server_cmd = [
             "python3",
             "-m",
@@ -172,7 +185,7 @@ def main() -> int:
             "--on-fail",
             "SIGTERM",
             "--on-exit",
-            "SIGTERM",
+            "WAIT",
             f"/tmp/pid_server-{env.allocation_id}",
             str(len(env.slot_ids)),
             "--",
