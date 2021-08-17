@@ -679,6 +679,7 @@ class PIDServer:
         except det.errors.WorkerError:
             # Worker failed.
             if on_fail is not None:
+                print("--------------------on_fail!")
                 # Let things finish logging, exiting on their own, etc.
                 time.sleep(grace_period)
                 p.send_signal(on_fail)
@@ -686,6 +687,7 @@ class PIDServer:
 
         # All workers exited normally.
         if on_exit is not None:
+            print("--------------------on_exit!")
             time.sleep(grace_period)
             p.send_signal(on_exit)
         return p.wait()

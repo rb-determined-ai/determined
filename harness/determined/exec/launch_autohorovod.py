@@ -20,7 +20,7 @@ import simplejson
 import determined as det
 import determined.common
 from determined import gpu, horovod, layers
-from determined.common import constants, storage
+from determined.common import api, constants, storage
 from determined.common.api import certs
 from determined.constants import HOROVOD_SSH_PORT
 
@@ -69,9 +69,8 @@ def main() -> int:
     hparams = simplejson.loads(os.environ["DET_HPARAMS"])
 
     # TODO: refactor websocket, data_layer, and profiling to to not use the cli_cert.
-    cert = certs.default_load(
-        master_url=f"http{'s' if use_tls else ''}://{master_addr}:{master_port}"
-    )
+    master_url=f"http{'s' if use_tls else ''}://{master_addr}:{master_port}"
+    cert = certs.default_load(master_url)
     certs.cli_cert = cert
 
     with open(os.environ["DET_LATEST_CHECKPOINT"], "r") as f:
@@ -168,9 +167,10 @@ def main() -> int:
 
         # Mark sshd containers as daemon containers that the master should kill when all non-daemon
         # contiainers (horovodrun, in this case) have exited.
-        r = api.get(
+        print(f"url=/api/v1/allocations/{env.allocation_id}/containers/{env.container_id}/daemon")
+        r = api.post(
             master_url,
-            path=f"/api/v1/allocations/{allocation_id}/containers/{container_id}/daemon",
+            path=f"/api/v1/allocations/{env.allocation_id}/containers/{env.container_id}/daemon",
             cert=cert,
         )
 

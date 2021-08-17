@@ -100,6 +100,8 @@ func NewAllocation(
 		rendezvous:           NewRendezvous(req.AllocationID, ranksFromReservations(reservations)),
 		containers:           make(map[cproto.ID]cproto.Container),
 		terminatedContainers: make(map[cproto.ID]sproto.TaskContainerStopped),
+
+		daemonReservations: map[cproto.ID]bool{},
 	}
 
 	if err := a.db.AddAllocation(&a.model); err != nil {
