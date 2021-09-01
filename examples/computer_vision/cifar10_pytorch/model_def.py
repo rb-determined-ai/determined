@@ -3,9 +3,9 @@ CNN on Cifar10 from Keras example:
 https://github.com/fchollet/keras/blob/master/examples/cifar10_cnn.py
 """
 
-import tempfile
 from typing import Any, Dict, Sequence, Tuple, Union, cast
 
+import filelock
 import torch
 import torchvision
 from torch import nn
@@ -42,10 +42,6 @@ class Flatten(nn.Module):
 class CIFARTrial(PyTorchTrial):
     def __init__(self, context: PyTorchTrialContext) -> None:
         self.context = context
-
-        # Create a unique download directory for each rank so they don't overwrite each
-        # other when doing distributed training.
-        self.download_directory = tempfile.mkdtemp()
 
         self.model = self.context.wrap_model(nn.Sequential(
             nn.Conv2d(NUM_CHANNELS, IMAGE_SIZE, kernel_size=(3, 3)),
@@ -104,17 +100,25 @@ class CIFARTrial(PyTorchTrial):
         transform = transforms.Compose(
             [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
         )
-        trainset = torchvision.datasets.CIFAR10(
-            root=self.download_directory, train=True, download=True, transform=transform
-        )
+        data_dir = "/tmp/datasets/torchvision.cifar/train"
+        os.makedirs(data_dir, exist_ok=True)
+        # Use a file lock so only one worker on each node does the download.
+        with filelock.FileLock(os.path.join(data_dir, "download.lock")):
+            trainset = torchvision.datasets.CIFAR10(
+                root=data_dir, train=True, download=True, transform=transform
+            )
         return DataLoader(trainset, batch_size=self.context.get_per_slot_batch_size())
 
     def build_validation_data_loader(self) -> Any:
         transform = transforms.Compose(
             [transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))]
         )
-        valset = torchvision.datasets.CIFAR10(
-            root=self.download_directory, train=False, download=True, transform=transform
-        )
+        data_dir = "/tmp/datasets/torchvision.cifar/val"
+        os.makedirs(data_dir, exist_ok=True)
+        # Use a file lock so only one worker on each node does the download.
+        with filelock.FileLock(os.path.join(data_dir, "download.lock")):
+            valset = torchvision.datasets.CIFAR10(
+                root=self.download_directory, train=False, download=True, transform=transform
+            )
 
         return DataLoader(valset, batch_size=self.context.get_per_slot_batch_size())

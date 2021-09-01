@@ -17,10 +17,9 @@ class MNISTTrial(LightningAdapter):
             hidden_size=context.get_hparam('hidden_size'),
             learning_rate=context.get_hparam('learning_rate'),
         )
-        data_dir = f"/tmp/data-rank{context.distributed.get_rank()}"
         self.dm = data.MNISTDataModule(
             data_url=context.get_data_config()["url"],
-            data_dir=data_dir,
+            data_dir="/tmp/datasets/determined-mnist-pytorch",
             batch_size=context.get_per_slot_batch_size(),
         )
 

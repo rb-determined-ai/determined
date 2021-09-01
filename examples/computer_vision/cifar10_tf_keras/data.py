@@ -3,6 +3,7 @@ import tarfile
 import urllib.request
 from typing import Any, Dict, Tuple
 
+import filelock
 import numpy as np
 import tensorflow.keras as keras
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
@@ -62,10 +63,15 @@ def get_data(data_path: str) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.nd
 def download_data(download_directory: str, url: str) -> str:
     os.makedirs(download_directory, exist_ok=True)
     filepath = os.path.join(download_directory, "data.tar.gz")
-    urllib.request.urlretrieve(url, filename=filepath)
-    tar = tarfile.open(filepath)
-    tar.extractall(path=download_directory)
-    return os.path.join(download_directory, "cifar-10-batches-py")
+    # Use a file lock so only one worker on each node does the download.
+    lockpath = os.path.join(download_directory, "download.lock")
+    outpath = os.path.join(download_directory, "cifar-10-batches-py")
+    with filelock.FileLock(lockpath):
+        if not os.path.exists(outpath):
+            urllib.request.urlretrieve(url, filename=filepath)
+            tar = tarfile.open(filepath)
+            tar.extractall(path=download_directory)
+    return outpath
 
 def get_training_data(
     data_directory, batch_size, width_shift_range, height_shift_range, horizontal_flip

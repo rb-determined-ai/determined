@@ -1,0 +1,34 @@
+# computer_vision/cifar10_pytorch
+# computer_vision/cifar10_pytorch_inference
+# computer_vision/cifar10_tf_keras
+# computer_vision/deformabledetr_coco_pytorch
+# computer_vision/detr_coco_pytorch
+computer_vision/efficientdet_pytorch  # MUST BE BIND MOUNTED IN
+# computer_vision/fasterrcnn_coco_pytorch
+computer_vision/iris_tf_keras  # downloads straight into a pandas dataframe?
+computer_vision/mmdetection_pytorch  # where is this putting the data with the gcs backend?
+# computer_vision/mnist_estimator
+computer_vision/mnist_pl  # LightningDataModule (mostly) handles this already
+computer_vision/mnist_tf_layers  # seems fine
+computer_vision/unets_tf_keras
+decision_trees/gbt_titanic_estimator
+features/checkpoint_hooks_pytorch
+features/custom_reducers_mnist_pytorch
+features/data_layer_mnist_estimator
+features/data_layer_mnist_tf_keras
+features/hp_constraints_mnist_pytorch
+gan/dcgan_tf_keras
+gan/gan_mnist_pl
+gan/gan_mnist_pytorch
+graphs/proteins_pytorch_geometric
+hp_search_benchmarks/darts_cifar10_pytorch
+hp_search_benchmarks/darts_penntreebank_pytorch
+meta_learning/protonet_omniglot_pytorch
+nas/gaea_pytorch
+nlp/albert_squad_pytorch
+nlp/bert_glue_pytorch
+nlp/bert_squad_pytorch
+nlp/word_language_model
+tutorials/fashion_mnist_tf_keras
+tutorials/imagenet_pytorch
+# tutorials/mnist_pytorch

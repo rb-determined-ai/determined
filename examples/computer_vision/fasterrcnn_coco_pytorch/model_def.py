@@ -29,14 +29,12 @@ class ObjectDetectionTrial(PyTorchTrial):
     def __init__(self, context: PyTorchTrialContext) -> None:
         self.context = context
 
-        # Create a unique download directory for each rank so they don't overwrite each
-        # other when doing distributed training.
-        self.download_directory = f"/tmp/data-rank{self.context.distributed.get_rank()}"
+        download_directory = f"/tmp/datasets/determined-PennFudanPed"
         download_data(
-            download_directory=self.download_directory, data_config=self.context.get_data_config(),
+            download_directory=download_directory, data_config=self.context.get_data_config(),
         )
 
-        dataset = PennFudanDataset(self.download_directory + "/PennFudanPed", get_transform())
+        dataset = PennFudanDataset(download_directory + "/PennFudanPed", get_transform())
 
         # Split 80/20 into training and validation datasets.
         train_size = int(0.8 * len(dataset))

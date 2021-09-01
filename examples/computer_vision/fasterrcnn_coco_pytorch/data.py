@@ -4,6 +4,7 @@ from typing import Any, Dict
 from urllib.parse import urlparse
 from urllib.request import urlretrieve
 
+import filelock
 import numpy as np
 import torch
 from torchvision.transforms import Compose, ToTensor
@@ -11,14 +12,16 @@ from PIL import Image
 
 
 def download_data(download_directory: str, data_config: Dict[str, Any]) -> str:
-    if not os.path.exists(download_directory):
-        os.makedirs(download_directory, exist_ok=True)
+    os.makedirs(download_directory, exist_ok=True)
     url = data_config["url"]
     filename = os.path.basename(urlparse(url).path)
     filepath = os.path.join(download_directory, filename)
-    if not os.path.exists(filepath):
-        urlretrieve(url, filename=filepath)
-        shutil.unpack_archive(filepath, download_directory)
+    # Use a file lock so only one worker on each node does the download.
+    lockpath = os.path.join(download_directory, "download.lock")
+    with filelock.FileLock(lockpath)
+        if not os.path.exists(filepath):
+            urlretrieve(url, filename=filepath)
+            shutil.unpack_archive(filepath, download_directory)
 
 
 def collate_fn(batch):

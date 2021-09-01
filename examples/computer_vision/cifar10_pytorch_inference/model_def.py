@@ -2,9 +2,9 @@
 Perform inference on pretrained CIFAR10 from https://github.com/huyvnphan/PyTorch_CIFAR10
 """
 
-import tempfile
 from typing import Any, Dict, Sequence, Tuple, Union, cast
 
+import filelock
 import numpy as np
 import os
 import torch
@@ -80,7 +80,6 @@ def accuracy_rate(predictions: torch.Tensor, labels: torch.Tensor) -> float:
 class CIFARTrial(PyTorchTrial):
     def __init__(self, context: PyTorchTrialContext) -> None:
         self.context = context
-        self.download_directory = tempfile.mkdtemp()
 
         # TODO: Load your trained model. Below are example approaches.
 
@@ -145,9 +144,13 @@ class CIFARTrial(PyTorchTrial):
                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
             ]
         )
-        trainset = torchvision.datasets.CIFAR10(
-            root=self.download_directory, train=True, download=True, transform=transform
-        )
+        data_dir = "/tmp/datasets/torchvision.cifar/train"
+        os.makedirs(data_dir, exist_ok=True)
+        # Use a file lock so only one worker on each node does the download.
+        with filelock.FileLock(os.path.join(data_dir, "download.lock")):
+            trainset = torchvision.datasets.CIFAR10(
+                root=data_dir, train=True, download=True, transform=transform
+            )
         return DataLoader(trainset, batch_size=self.context.get_per_slot_batch_size())
 
     def build_validation_data_loader(self) -> Any:
@@ -160,11 +163,12 @@ class CIFARTrial(PyTorchTrial):
                 ),
             ]
         )
-        valset = torchvision.datasets.CIFAR10(
-            root=self.download_directory,
-            train=False,
-            download=True,
-            transform=transform,
-        )
+        data_dir = "/tmp/datasets/torchvision.cifar/val"
+        os.makedirs(data_dir, exist_ok=True)
+        # Use a file lock so only one worker on each node does the download.
+        with filelock.FileLock(os.path.join(data_dir, "download.lock")):
+            valset = torchvision.datasets.CIFAR10(
+                root=self.download_directory, train=False, download=True, transform=transform
+            )
 
         return DataLoader(valset, batch_size=self.context.get_per_slot_batch_size())

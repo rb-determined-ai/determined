@@ -27,11 +27,6 @@ class MNistTrial(PyTorchTrial):
     def __init__(self, context: PyTorchTrialContext) -> None:
         self.context = context
 
-        # Create a unique download directory for each rank so they don't overwrite each
-        # other when doing distributed training.
-        self.download_directory = f"/tmp/data-rank{self.context.distributed.get_rank()}"
-        self.data_downloaded = False
-
         self.model = self.context.wrap_model(nn.Sequential(
             nn.Conv2d(1, self.context.get_hparam("n_filters1"), 3, 1),
             nn.ReLU(),
@@ -54,25 +49,19 @@ class MNistTrial(PyTorchTrial):
         )
 
     def build_training_data_loader(self) -> DataLoader:
-        if not self.data_downloaded:
-            self.download_directory = data.download_dataset(
-                download_directory=self.download_directory,
-                data_config=self.context.get_data_config(),
-            )
-            self.data_downloaded = True
+        data_dir = "/tmp/datasets/determined-mnist-pytorch"
+        data_config = self.context.get_data_config()
+        data.download_dataset(data_config["url"], data_dir)
 
-        train_data = data.get_dataset(self.download_directory, train=True)
+        train_data = data.get_dataset(data_dir, train=True)
         return DataLoader(train_data, batch_size=self.context.get_per_slot_batch_size())
 
     def build_validation_data_loader(self) -> DataLoader:
-        if not self.data_downloaded:
-            self.download_directory = data.download_dataset(
-                download_directory=self.download_directory,
-                data_config=self.context.get_data_config(),
-            )
-            self.data_downloaded = True
+        data_dir = "/tmp/datasets/determined-mnist-pytorch"
+        data_config = self.context.get_data_config()
+        data.download_dataset(data_config["url"], data_dir)
 
-        validation_data = data.get_dataset(self.download_directory, train=False)
+        validation_data = data.get_dataset(data_dir, train=False)
         return DataLoader(validation_data, batch_size=self.context.get_per_slot_batch_size())
 
     def train_batch(

@@ -7,12 +7,12 @@ import tarfile
 import requests
 from typing import Callable, Dict, List, Tuple
 
+import filelock
 import tensorflow as tf
 
 from determined.estimator import EstimatorTrial, EstimatorTrialContext, ServingInputReceiverFn
 
 
-WORK_DIRECTORY = "/tmp/determined-mnist-estimator-work-dir"
 MNIST_TF_RECORDS_FILE = "mnist-tfrecord.tar.gz"
 MNIST_TF_RECORDS_URL = (
     "https://s3-us-west-2.amazonaws.com/determined-ai-test-data/" + MNIST_TF_RECORDS_FILE
@@ -22,31 +22,30 @@ IMAGE_SIZE = 28
 NUM_CLASSES = 10
 
 
-def download_data(download_directory) -> str:
+def download_data() -> str:
     """
     Return the path of a directory with the MNIST dataset in TFRecord format.
     The dataset will be downloaded into download_directory, if it is not already
     present.
     """
-    if not tf.io.gfile.exists(download_directory):
-        tf.io.gfile.makedirs(download_directory)
+    download_dir = "/tmp/datasets/determined-mnist-tfrecord"
+    os.makedirs(download_dir, exist_ok=True)
+    lockpath = os.path.join(download_dir, "download.lock")
+    tarpath = os.path.join(download_dir, MNIST_TF_RECORDS_FILE)
+    outpath = os.path.join(download_dir, "mnist-tfrecord")
+    # Use a file lock so only one worker on each node does the download.
+    with filelock.FileLock(lockpath):
+        if not os.path.exists(outpath):
+            logging.info(f"Downloading {MNIST_TF_RECORDS_URL}")
+            r = requests.get(MNIST_TF_RECORDS_URL)
+            with open(tarpath, "wb") as f:
+                f.write(r.content)
 
-    filepath = os.path.join(download_directory, MNIST_TF_RECORDS_FILE)
-    if not tf.io.gfile.exists(filepath):
-        logging.info("Downloading {}".format(MNIST_TF_RECORDS_URL))
+            logging.info("Extracting...")
+            with tarfile.open(tarpath, mode="r:gz") as f:
+                f.extractall(path=download_dir)
 
-        r = requests.get(MNIST_TF_RECORDS_URL)
-        with tf.io.gfile.GFile(filepath, "wb") as f:
-            f.write(r.content)
-            logging.info("Downloaded {} ({} bytes)".format(MNIST_TF_RECORDS_FILE, f.size()))
-
-        logging.info("Extracting {} to {}".format(MNIST_TF_RECORDS_FILE, download_directory))
-        with tarfile.open(filepath, mode="r:gz") as f:
-            f.extractall(path=download_directory)
-
-    data_dir = os.path.join(download_directory, "mnist-tfrecord")
-    assert tf.io.gfile.exists(data_dir)
-    return data_dir
+    return outpath
 
 
 def parse_mnist_tfrecord(serialized_example: tf.Tensor) -> Tuple[Dict[str, tf.Tensor], tf.Tensor]:
@@ -70,11 +69,6 @@ def parse_mnist_tfrecord(serialized_example: tf.Tensor) -> Tuple[Dict[str, tf.Te
 class MNistTrial(EstimatorTrial):
     def __init__(self, context: EstimatorTrialContext) -> None:
         self.context = context
-
-        # Create a unique download directory for each rank so they don't overwrite each
-        # other when doing distributed training.
-        self.download_directory = f"/tmp/data-rank{self.context.distributed.get_rank()}"
-        self.data_downloaded = False
 
     def build_estimator(self) -> tf.estimator.Estimator:
         optimizer = tf.compat.v1.train.AdamOptimizer(
@@ -133,17 +127,11 @@ class MNistTrial(EstimatorTrial):
         return [os.path.join(directory, path) for path in tf.io.gfile.listdir(directory)]
 
     def build_train_spec(self) -> tf.estimator.TrainSpec:
-        if not self.data_downloaded:
-            self.download_directory = download_data(download_directory=self.download_directory)
-            self.data_downloaded = True
-
-        train_files = self._get_filenames(os.path.join(self.download_directory, "train"))
+        data_dir = download_data()
+        train_files = self._get_filenames(os.path.join(data_dir, "train"))
         return tf.estimator.TrainSpec(self._input_fn(train_files, shuffle=True))
 
     def build_validation_spec(self) -> tf.estimator.EvalSpec:
-        if not self.data_downloaded:
-            self.download_directory = download_data(download_directory=self.download_directory)
-            self.data_downloaded = True
-
-        val_files = self._get_filenames(os.path.join(self.download_directory, "validation"))
+        data_dir = download_data()
+        val_files = self._get_filenames(os.path.join(data_dir, "validation"))
         return tf.estimator.EvalSpec(self._input_fn(val_files, shuffle=False), steps=None)

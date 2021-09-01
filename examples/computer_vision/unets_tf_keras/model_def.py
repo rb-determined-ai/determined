@@ -10,8 +10,9 @@ from tensorflow_examples.models.pix2pix import pix2pix
 import tensorflow_datasets as tfds
 import numpy as np
 
-import urllib.request
+import filelock
 import os
+import urllib.request
 
 from determined.keras import TFKerasTrial
 from tensorflow import keras
@@ -109,6 +110,10 @@ class UNetsTrial(TFKerasTrial):
         return model
 
     def build_training_data_loader(self):
+        # Use a file lock so only one worker on each node does the download.
+        with filelock.FileLock(lockpath):
+            YOU ARE HERE
+
         dataset = tfds.load(
             'oxford_iiit_pet:3.*.*',
             split="train",

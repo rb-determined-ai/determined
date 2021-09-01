@@ -37,9 +37,8 @@ class CIFARTrial(keras.TFKerasTrial):
 
         # Create a unique download directory for each rank so they don't overwrite each
         # other when doing distributed training.
-        self.download_directory = f"/tmp/data-rank{self.context.distributed.get_rank()}"
-        self.download_directory = download_data(
-            download_directory=self.download_directory,
+        self.data_dir = download_data(
+            download_directory=f"/tmp/datasets/determined-cifar",
             url=self.context.get_data_config()["url"],
         )
 
@@ -85,7 +84,7 @@ class CIFARTrial(keras.TFKerasTrial):
         hparams = self.context.get_hparams()
         # Return a tf.keras.Sequence.
         return get_training_data(
-            data_directory=self.download_directory,
+            data_directory=self.data_dir,
             batch_size=self.context.get_per_slot_batch_size(),
             width_shift_range=hparams.get("width_shift_range", 0.0),
             height_shift_range=hparams.get("height_shift_range", 0.0),
@@ -93,4 +92,4 @@ class CIFARTrial(keras.TFKerasTrial):
         )
 
     def build_validation_data_loader(self) -> keras.InputData:
-        return get_validation_data(self.download_directory)
+        return get_validation_data(self.data_dir)
