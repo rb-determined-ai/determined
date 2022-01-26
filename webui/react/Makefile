@@ -22,11 +22,11 @@ node_modules/done.stamp: package-lock.json
 get-deps: node_modules/done.stamp
 
 .PHONY: build
-build: build/done.stamp
-
-build/done.stamp: $(source_files) node_modules/done.stamp tsconfig.json craco.config.js jest.config.js
-	npm run build
-	touch $@
+build: $(source_files) node_modules/done.stamp tsconfig.json craco.config.js jest.config.js
+	buildcache ./build-webui.sh
+	# HACK: buildcache will tar the output of `craco build` in
+	# order to make it cacheable, so we have to untar it now.
+	tar -xf build.tar
 
 .PHONY: build-storybook
 build-storybook:
