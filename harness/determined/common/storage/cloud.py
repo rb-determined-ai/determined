@@ -2,18 +2,20 @@ import contextlib
 import os
 import pathlib
 import shutil
-from typing import Iterator
+from typing import Callable, Iterator, Optional
 
 from determined.common import storage
 
 
 class CloudStorageManager(storage.StorageManager):
     @contextlib.contextmanager
-    def restore_path(self, src: str) -> Iterator[pathlib.Path]:
+    def restore_path(
+        self, src: str, selector: Optional[Callable[[str], bool]] = None
+    ) -> Iterator[pathlib.Path]:
         dst = os.path.join(self._base_path, src)
         os.makedirs(dst, exist_ok=True)
 
-        self.download(src, dst)
+        self.download(src, dst, selector)
 
         try:
             yield pathlib.Path(dst)

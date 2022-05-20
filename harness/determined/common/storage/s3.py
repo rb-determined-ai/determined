@@ -2,7 +2,7 @@ import logging
 import os
 import re
 import tempfile
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 import requests
 
@@ -96,14 +96,22 @@ class S3StorageManager(storage.CloudStorageManager):
                 self.bucket.upload_file(abs_path, key_name)
 
     @util.preserve_random_state
-    def download(self, src: str, dst: Union[str, os.PathLike]) -> None:
+    def download(
+        self,
+        src: str,
+        dst: Union[str, os.PathLike],
+        selector: Optional[Callable[[str], bool]] = None,
+    ) -> None:
         dst = os.fspath(dst)
         prefix = self.get_storage_prefix(src)
         logging.info(f"Downloading {prefix} from S3")
         found = False
-        for obj in self.bucket.objects.filter(Prefix=prefix):
+        for obj in self.bucket.objects.selector(Prefix=prefix):
             found = True
-            _dst = os.path.join(dst, os.path.relpath(obj.key, prefix))
+            relname = os.path.relpath(obj.key, prefix)
+            if selector is not None and not selector(relname):
+                continue
+            _dst = os.path.join(dst, relname)
             dst_dir = os.path.dirname(_dst)
             os.makedirs(dst_dir, exist_ok=True)
 
@@ -125,7 +133,7 @@ class S3StorageManager(storage.CloudStorageManager):
         prefix = self.get_storage_prefix(tgt)
         logging.info(f"Deleting {prefix} from S3")
 
-        objects = [{"Key": obj.key} for obj in self.bucket.objects.filter(Prefix=prefix)]
+        objects = [{"Key": obj.key} for obj in self.bucket.objects.selector(Prefix=prefix)]
 
         # S3 delete_objects has a limit of 1000 objects.
         for chunk in util.chunks(objects, 1000):

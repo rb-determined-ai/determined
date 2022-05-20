@@ -2,7 +2,7 @@ import contextlib
 import os
 import pathlib
 import shutil
-from typing import Any, Dict, Iterator, Optional, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
 from determined import errors
 from determined.common import check
@@ -58,10 +58,12 @@ class SharedFSStorageManager(StorageManager):
         pass
 
     @contextlib.contextmanager
-    def restore_path(self, src: str) -> Iterator[pathlib.Path]:
+    def restore_path(
+        self, src: str, selector: Optional[Callable[[str], bool]] = None
+    ) -> Iterator[pathlib.Path]:
         """
-        Prepare a local directory exposing the checkpoint. Do some simple checks to make sure the
-        configuration seems reasonable.
+        Find the shared_fs directory that corresponds to the checkpoint.  Since no copying occurs,
+        selector is ignored.
         """
         check.true(
             os.path.exists(self._base_path),
@@ -89,11 +91,52 @@ class SharedFSStorageManager(StorageManager):
         src = os.fspath(src)
         shutil.copytree(src, os.path.join(self._base_path, dst))
 
-    def download(self, src: str, dst: Union[str, os.PathLike]) -> None:
+    def download(
+        self,
+        src: str,
+        dst: Union[str, os.PathLike],
+        selector: Optional[Callable[[str], bool]] = None,
+    ) -> None:
         dst = os.fspath(dst)
+
+        # convert selector() into a suitable ignore() for copytree
+        maybe_dangling = []
+
+        def ignore(ign_dir: str, names: List[str]) -> List[str]:
+            out: List[str] = []
+            if selector is None:
+                return out
+            # rel_dir would be "subdir" instead of "/determined_shared_fs/UUID/subdir"
+            rel_dir = os.path.relpath(ign_dir, src)
+            for name in names:
+                # ckpt_path would be "subdir/file"
+                ckpt_path = os.path.join(rel_dir, name)
+                if selector(ckpt_path):
+                    # The user wants this file or directory.
+                    continue
+                # src_path would be "/determined_shared_fs/UUID/subdir/file"
+                src_path = os.path.join(ign_dir, name)
+                if os.path.isdir(src_path):
+                    # The user does not want this directory, but we don't yet know if there
+                    # might be a subfile or subdirectory which they do want.  Let copytree
+                    # continue and revisit this later.
+                    maybe_dangling.append(ckpt_path)
+                    continue
+                out.append(name)
+            return out
+
         try:
-            shutil.copytree(os.path.join(self._base_path, src), dst)
+            shutil.copytree(os.path.join(self._base_path, src), dst, ignore=ignore)
         except FileNotFoundError:
             raise errors.CheckpointNotFound(
                 f"Did not find checkpoint {src} in shared_fs storage"
             ) from None
+
+        # Any directory which was not wanted (but which we had to recurse into anyway), we now
+        # attempt to remove.  By traversing the list in reverse order, any terminal maybe_dangling
+        # directories will be removed, and the others will raise OSErrors, which we can ignore.
+        for dangling in reversed(maybe_dangling):
+            try:
+                os.rmdir(os.path.join(dst, dangling))
+            except OSError:
+                pass

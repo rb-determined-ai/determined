@@ -2,7 +2,7 @@ import abc
 import contextlib
 import os
 import pathlib
-from typing import Any, Dict, Iterator, Optional, Union
+from typing import Any, Callable, Dict, Iterator, Optional, Union
 
 
 class StorageManager(metaclass=abc.ABCMeta):
@@ -75,7 +75,9 @@ class StorageManager(metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     @contextlib.contextmanager
-    def restore_path(self, storage_id: str) -> Iterator[pathlib.Path]:
+    def restore_path(
+        self, storage_id: str, selector: Optional[Callable[[str], bool]] = None
+    ) -> Iterator[pathlib.Path]:
         """
         restore_path should prepare a checkpoint, yield the path to the checkpoint, and do any
         necessary cleanup afterwards. Subclasess of StorageManager must implement this.
@@ -87,7 +89,12 @@ class StorageManager(metaclass=abc.ABCMeta):
         pass
 
     @abc.abstractmethod
-    def download(self, src: str, dst: Union[str, os.PathLike]) -> None:
+    def download(
+        self,
+        src: str,
+        dst: Union[str, os.PathLike],
+        selector: Optional[Callable[[str], bool]] = None,
+    ) -> None:
         pass
 
     @abc.abstractmethod

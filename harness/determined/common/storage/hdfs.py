@@ -1,7 +1,7 @@
 import logging
 import os
 import tempfile
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 
 from hdfs.client import InsecureClient
 
@@ -35,8 +35,17 @@ class HDFSStorageManager(storage.CloudStorageManager):
         self.client.upload(dst, src)
 
     @util.preserve_random_state
-    def download(self, src: str, dst: Union[str, os.PathLike]) -> None:
+    def download(
+        self,
+        src: str,
+        dst: Union[str, os.PathLike],
+        selector: Optional[Callable[[str], bool]] = None,
+    ) -> None:
         dst = os.fspath(dst)
+        if selector is not None:
+            raise NotImplementedError(
+                "hdfs checkpoint storage does not currently support sharded downloads"
+            )
         logging.info(f"Downloading {src} from HDFS")
         self.client.download(src, dst, overwrite=True)
 
