@@ -2,7 +2,6 @@ from determined.tensorboard.metric_writers import BatchMetricWriter, MetricWrite
 from determined.tensorboard.base import TensorboardManager, get_metric_writer
 from determined.tensorboard.build import (
     build,
-    get_base_path,
     get_sync_path,
     get_experiment_sync_path,
 )

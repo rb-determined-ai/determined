@@ -67,11 +67,11 @@ class TensorboardManager(metaclass=abc.ABCMeta):
         pass
 
 
-def get_metric_writer() -> tensorboard.BatchMetricWriter:
+def get_metric_writer(tb_path: pathlib.Path) -> tensorboard.BatchMetricWriter:
     try:
         from determined.tensorboard.metric_writers import tensorflow
 
-        writer: tensorboard.MetricWriter = tensorflow.TFWriter()
+        writer: tensorboard.MetricWriter = tensorflow.TFWriter(tb_path)
 
     except ModuleNotFoundError:
         logging.warning("TensorFlow writer not found")

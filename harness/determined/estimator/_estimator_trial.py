@@ -69,7 +69,8 @@ class DeterminedControlHook(estimator.RunHook):
         self._session = None  # type: Optional[tf.Session]
         self._current_global_step = None  # type: Optional[int]
         self._saver = None  # type: Optional[tf.train.Saver]
-        self._writer = tf.compat.v1.summary.FileWriter(tensorboard.get_base_path({}))
+        tb_path = estimator_trial_controller.context.get_tensorboard_path()
+        self._writer = tf.compat.v1.summary.FileWriter(tb_path)
 
         # Store the response_func for train_for_step workloads while we do the training.
         self.train_response_func = None  # type: Optional[workload.ResponseFunc]
@@ -172,7 +173,10 @@ class DeterminedControlHook(estimator.RunHook):
         self.batches_processed_in_step = 0
         self.step_metrics = []
 
-        estimator._cleanup_after_train_step(self.estimator_trial_controller.estimator_dir)
+        estimator._cleanup_after_train_step(
+            self.estimator_trial_controller.estimator_dir,
+            self.estimator_trial_controller.context.get_tensorboard_path(),
+        )
 
         # Re-enter the control loop (block on receiving the next instruction)
         self.control_loop()
@@ -767,7 +771,9 @@ class EstimatorTrialController(det.TrialController):
                 logging.debug(f"Averaged validation metrics: {metrics}.")
 
         estimator._cleanup_after_validation_step(
-            pathlib.Path(self.estimator._model_dir), self.is_chief
+            pathlib.Path(self.estimator._model_dir),
+            self.is_chief,
+            self.estimator_trial_controller.context.get_tensorboard_path(),
         )
 
         # Reset the per-evaluation set of allgather ops in the context.

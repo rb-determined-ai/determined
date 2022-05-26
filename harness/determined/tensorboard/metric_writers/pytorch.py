@@ -1,3 +1,4 @@
+import pathlib
 from typing import Any, Union
 
 import numpy as np
@@ -35,10 +36,10 @@ class TorchWriter(tensorboard.MetricWriter):
                 self.logger.writer.add_scalar('my_metric', np.random.random(), batch_idx)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, tb_path: pathlib.Path) -> None:
         super().__init__()
 
-        self.writer: Any = SummaryWriter(log_dir=tensorboard.get_base_path({}))  # type: ignore
+        self.writer: Any = SummaryWriter(log_dir=tb_path)  # type: ignore
 
     def add_scalar(self, name: str, value: Union[int, float, np.number], step: int) -> None:
         self.writer.add_scalar(name, value, step)

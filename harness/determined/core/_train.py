@@ -96,10 +96,12 @@ class TrainContext:
             self._tbd_writer.on_train_step_end(steps_completed, metrics, batch_metrics)
             self._tbd_mgr.sync()
 
-    def get_tensorboard_base_path(self) -> pathlib.Path:
+    def get_tensorboard_path(self) -> pathlib.Path:
         """
         Get TensorBoard log directory path.
+
         """
+        # XXX what about the None case?
         return self._tbd_mgr.base_path if self._tbd_mgr else None
 
     def _get_serializable_metrics(self, metrics: Dict[str, Any]) -> Set[str]:

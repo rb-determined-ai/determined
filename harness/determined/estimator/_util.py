@@ -174,22 +174,21 @@ def _scan_checkpoint_directory(checkpoint_dir: str) -> List[Checkpoint]:
     return list(checkpoints.values())
 
 
-def move_tensorboard_files(event_dir: pathlib.Path) -> None:
+def move_tensorboard_files(event_dir: pathlib.Path, tb_path: pathlib.Path) -> None:
     """
     Given a TensorFlow Estimator model directory, find all nested Tensorboard
     files and move them to the TensorBoard log directory.
     """
-    tensorboard_dir = tensorboard.get_base_path({})
     tensorboard_files = tensorboard.util.find_tb_files(event_dir)
     for file in tensorboard_files:
-        file.rename(tensorboard_dir.joinpath(file.name))
+        file.rename(tb_path.joinpath(file.name))
 
 
-def _cleanup_after_train_step(model_dir: pathlib.Path) -> None:
+def _cleanup_after_train_step(model_dir: pathlib.Path, tb_path: pathlib.Path) -> None:
     # Tensorboard files are written out during training by estimators. We move
     # them to the tensorboard directory so that they can be saved to persistent
     # storage.
-    move_tensorboard_files(model_dir)
+    move_tensorboard_files(model_dir, tb_path)
 
     # By default the Estimator API is configured to accumulate checkpoints
     # in the model directory after every train() invocation. To avoid
@@ -200,9 +199,11 @@ def _cleanup_after_train_step(model_dir: pathlib.Path) -> None:
     delete_all_checkpoints_except_most_recent(str(model_dir))
 
 
-def _cleanup_after_validation_step(model_dir: pathlib.Path, is_chief: bool) -> None:
+def _cleanup_after_validation_step(
+    model_dir: pathlib.Path, is_chief: bool, tb_path: pathlib.Path
+) -> None:
     if is_chief:
-        move_tensorboard_files(model_dir)
+        move_tensorboard_files(model_dir, tb_path)
 
 
 def delete_all_checkpoints_except_most_recent(model_dir: str) -> None:

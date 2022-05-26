@@ -156,6 +156,7 @@ def init(
             info.trial._config["checkpoint_storage"],
             container_path=constants.SHARED_FS_CONTAINER_PATH,
         )
+        # XXX lifetime issue, what should tb_path be?
         tbd_writer = tensorboard.get_metric_writer()
 
         train = core.TrainContext(

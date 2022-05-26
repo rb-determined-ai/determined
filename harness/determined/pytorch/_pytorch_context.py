@@ -9,7 +9,6 @@ import determined as det
 from determined import profiler, pytorch, util
 from determined.common import check
 from determined.horovod import hvd
-from determined.tensorboard import get_base_path
 
 # Apex is included only for GPU trials.
 try:
@@ -298,8 +297,9 @@ class PyTorchTrialContext(det.TrialContext, pytorch._PyTorchReducerContext):
         Sets a torch profiler instance on the trial context to be called in _pytorch_trial
         when training.
         """
+        tb_path = str(self.get_tensorboard_path())
         self.profiler = torch.profiler.profile(
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(str(get_base_path({}))),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(tb_path),
             *args,
             **kwargs,
         )

@@ -1,3 +1,4 @@
+import pathlib
 import time
 from typing import Optional, Set, Union
 
@@ -23,11 +24,9 @@ class TFWriter(tensorboard.MetricWriter):
     tfevent files containing scalar batch metrics.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, tb_path) -> None:
         super().__init__()
-        self.writer = EventFileWriter(
-            logdir=str(tensorboard.get_base_path({})), filename_suffix=None
-        )
+        self.writer = EventFileWriter(logdir=str(tb_path), filename_suffix=None)
         self.createSummary = tf.Summary
 
         # _seen_summary_tags is vendored from TensorFlow: tensorflow/python/summary/writer/writer.py
