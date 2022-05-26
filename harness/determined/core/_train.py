@@ -1,6 +1,7 @@
 import enum
 import logging
-from typing import Any, Dict, List, Optional, Set
+import pathlib
+from typing import Any, Callable, Dict, List, Optional, Set
 
 import determined as det
 from determined import tensorboard
@@ -28,6 +29,7 @@ class TrainContext:
         trial_id: int,
         run_id: int,
         exp_id: int,
+        distributed: DistributedContext,
         tbd_mgr: Optional[tensorboard.TensorboardManager],
         tbd_writer: Optional[tensorboard.BatchMetricWriter],
     ) -> None:
@@ -35,6 +37,7 @@ class TrainContext:
         self._trial_id = trial_id
         self._run_id = run_id
         self._exp_id = exp_id
+        self._distributed = distributed
         self._tbd_mgr = tbd_mgr
         self._tbd_writer = tbd_writer
 
@@ -89,10 +92,15 @@ class TrainContext:
             data=det.util.json_encode(body),
         )
 
-        # Also sync tensorboard.
         if self._tbd_writer and self._tbd_mgr:
             self._tbd_writer.on_train_step_end(steps_completed, metrics, batch_metrics)
             self._tbd_mgr.sync()
+
+    def get_tensorboard_base_path(self) -> pathlib.Path:
+        """
+        Get TensorBoard log directory path.
+        """
+        return self._tbd_mgr.base_path if self._tbd_mgr else None
 
     def _get_serializable_metrics(self, metrics: Dict[str, Any]) -> Set[str]:
         serializable_metrics = set()

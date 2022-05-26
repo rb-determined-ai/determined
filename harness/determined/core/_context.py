@@ -163,6 +163,7 @@ def init(
             info.trial.trial_id,
             info.trial._trial_run_id,
             info.trial.experiment_id,
+            distributed,
             tbd_mgr,
             tbd_writer,
         )
