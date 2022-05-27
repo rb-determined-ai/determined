@@ -657,6 +657,24 @@ class ReduceLROnPlateau(tf.keras.callbacks.ReduceLROnPlateau, Callback):  # type
         _tf_keras_callback_load_state(self, state)
 
 
+
+def _get_base_tb_path() -> pathlib.Path:
+    """
+    """
+    info = det.get_cluster_info()
+    allocation = info.allocation_id if info else ""
+
+    allocation_id = os.environ.get("DET_ALLOCATION_ID", "")
+    rank = get_rank_if_horovod_process_else_return_zero()
+
+    base_path = pathlib.Path("/", "tmp")
+
+    if rank == 0:
+        return base_path.joinpath(f"tensorboard-{allocation_id}")
+
+    return base_path.joinpath(f"tensorboard-{allocation_id}-{rank}")
+
+
 class TensorBoard(tf.keras.callbacks.TensorBoard, Callback):  # type: ignore
     """
     This is a thin wrapper over the TensorBoard callback that ships with ``tf.keras``.  For more

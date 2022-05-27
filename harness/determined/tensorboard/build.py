@@ -29,6 +29,8 @@ def get_rank_if_horovod_process_else_return_zero() -> Optional[int]:
 
 def get_base_path() -> pathlib.Path:
     info = det.get_cluster_info()
+    allocation = info.allocation_id if info else ""
+
     allocation_id = os.environ.get("DET_ALLOCATION_ID", "")
     rank = get_rank_if_horovod_process_else_return_zero()
 
