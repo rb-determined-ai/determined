@@ -128,6 +128,13 @@ const (
 	Terminate AllocationSignal = "terminate"
 )
 
+var (
+	// resourcesNotAllocated is a sentinel
+	resourcesNotAllocated = &sproto.ResourcesAllocated{}
+	// taskSpecNotBuilt is a sentinel
+	resourcesNotAllocated = &tasks.TaskSpec{}
+)
+
 const (
 	killCooldown       = 30 * time.Second
 	okExitMessage      = "allocation exited successfully"
@@ -160,6 +167,521 @@ func NewAllocation(
 	}
 }
 
+Allocation struct {
+	// System dependencies.
+	db     db.DB
+	rm     *actor.Ref
+	logger *Logger
+
+	// The request to create the allocation, essentially our configuration.
+	req sproto.AllocateRequest
+	// The persisted representation.
+	model model.Allocation
+
+	// State of all our resources.
+	resources resourcesList
+	// Separates the existence of resources from us having started them.
+	resourcesStarted bool
+	// Tracks the initial container exit, unless we caused the failure by killed the trial.
+	exitErr error
+	// Marks that we intentionally killed the allocation so we can know to
+	// ignore any errors from containers dying. Not set when we kill an already
+	// terminating trial.
+	killedWhileRunning bool
+	// Marks that the trial exited successfully, but we killed some daemon containers.
+	killedDaemons bool
+	// We send a kill when we terminate a task forcibly. we terminate forcibly when a container
+	// exits non zero. we don't need to send all these kills, so this exists.
+	killCooldown *time.Time
+	// tracks if we have finished termination.
+	exited bool
+
+	// State for specific sub-behaviors of an allocation.
+	// Encapsulates the preemption state of the currently allocated task.
+	// If there is no current task, or it is unallocated, it is nil.
+	preemption *Preemption
+	// Encapsulates logic of rendezvousing containers of the currently
+	// allocated task. If there is no current task, or it is unallocated, it is nil.
+	rendezvous *rendezvous
+	// Encapsulates the logic of watching for idle timeouts.
+	idleTimeoutWatcher *IdleTimeoutWatcher
+	// proxy state
+	proxies []string
+	// proxyAddress is provided by determined.exec.prep_container if the RM doesn't provide it.
+	proxyAddress *string
+	// active all gather state
+	allGather *allGather
+
+	logCtx   detLogger.Context
+	restored bool
+
+	///////////////
+	_init struct {
+		added bool
+		session bool
+		proxy bool
+		// list of containers we actually started, so we know what to teardown
+		containersStarted []sproto.ResourcesID
+	}
+
+	_resources struct {
+		requested bool
+		assigned *sproto.ResourcesAllocated
+		done bool
+	}
+
+	_taskSpec struct {
+		requested bool
+		spec *tasks.TaskSpec
+		done bool
+	}
+
+	_closing bool
+	_reason string
+
+	// "teardown" means asynchronous cleanups that are required, like making sure containers are
+	// cleaned up.  Synchronous cleanup happens in deinit, like writing to the database.
+	_teardown struct {
+		wantKill bool
+		killSent bool
+		done bool
+	}
+}
+
+/*
+Theory:
+
+1. I define an "async object" as an object which is probably some implementation of a state machine,
+   and it is able to send and receive signals from other objects.  These sorts of objects are common
+   in event-based programming (gnome's C-based glib framework, for instance).  There may be a more
+   official phrase than "async object" but I don't know it.
+
+2. Systems of async objects may be executed on a single thread or on many threads.  The
+   single-threaded case may use helper threads, but it would have some mechanic by which operations
+   done on helper threads are brought back into the single main thread before processing.
+
+3. When async object frameworks operate on a single thread, each object can have two types of
+   methods: synchronous or asynchronous.
+
+4. A synchronous operation would be like a simple getter.  Another object can call that getter and
+   get the result immediately.  In a single-threaded paradigm, this is safe because if object A is
+   active (that is, actively mutatating its state), then any other object B must be inactive (that
+   is, in a well-defined state, waiting for new events), so A can call B's getters without risk of
+   reading a partially-defined state.  Synchronous objects don't have to be getters; A could
+   register as a listener of B (inserting itself into a linked list in B), or other things that
+   don't modify B's state machine.
+
+5. Allowing a synchronous operation on an object to mutate that object's state can be dangerous.  If
+   the top-level object which is operating (mutating its state) makes a synchronous call to B that
+   mutate's B's state, then you have broken the assumption that only one object is mutating its
+   state at a time.  Ultimately this may lead to "callback hell", where the execution path becomes
+   unclear and it's also unclear which methods on which objects are safe to call at a given time.
+
+6. Asynchronous operations avoid callback hell.  An async operation usually takes the form of a
+   queueable message to be processed later.  Async operations have the negative side-effect of
+   creating additional states, where object A wants a response from B before proceeding.
+
+7. In multi-threaded paradigms, synchronous operations either require locks or are not allowed.
+   This is why our actor system is based on 100% message passing (asynchronous operations).
+
+8. As a result, even simple getters result in a pair of messages, which results in an additional
+   state for the getter.  Our actor system supports Asks, which allow the return message to skip
+   the message queue, avoiding the additional state.  Asks have the negative side-effect that you
+   can create deadlock, if two objects ask each other something, since the Ask sender is effectively
+   unresponse itself while it waits for the response from the Ask recipient.
+
+Conclusions:
+
+A. I doubt we are ready to go fully single-threaded.  I think it would be totally worth it from a
+   complexity perspective, but I think it might be a lot of work and pretty high-risk.
+
+B. Therefore we are stuck with async-only and 100% message passing (regardless of whether or not we
+   use our actor system to accomplish it).
+
+C. Therefore we need to get better at writing state machines that fit this paradigm.  That means
+   we need to be able to add new states relatively cheaply; easy to read, easy to understand, and
+   obviously correct.
+*/
+
+/*
+Allocation actor problems:
+- .Cleanup()  (in fact, it seems like this code exists just because the actor is so complex that we
+               can't tell if Cleanup is necessary or not!)
+- .terminated()
+
+- PostStop message
+
+- ResourcesReleased in multiple places
+
+*/
+
+/*
+actor system problems:
+- Tells are for pub/sub mechanics (where you don't care if messages are ever received) but
+  unsuitable for normal asynchronous behaviors.  In principle, two tells seem like they could
+  replace on ask, but in practice, if the actor receiving the first tell is dead, the actor sending
+  the first Tell has no way to know.  It will just be in datalock forever waiting for the second
+  Tell.
+
+- The extra states introduced by the actor system are dizzyingly complicated.  An Ask can fail in
+  several different ways:
+  - the actor fails to respond in Receive
+  - the actor inbox is already closed
+  - the actor shuts down while the message is in the queue
+
+  In a world with normal function calls and normal locks, only one of these states would be allowed.
+
+- the stop message is processed in a queue with other messages.  That should not be the case.
+  Those mechanics make sense inside an actor's state machine, but the actor itself should not have
+  those mechanics; stop should prevent additional messages.  Besides, the inbox isn't closed until
+  the stop message is processed, so there are still messages that get discarded.
+
+- the message queue guarantees everything is handled in-order... but most things only need to be
+  in-order relative to similar things.  E.g. a GetThing could be handled completely independently of
+  anything else.  Additionally, having a message queue causes the "message was not processed" case
+  to always exist.
+
+  But overall... enforcing everything to happen async isn't a terrible rule I think.  I still have
+  mixed feelings on this.  Certainly, it makes it a lot easier for async objects to operate across
+  multiple threads.
+
+  Are we ready to go serial-by-default?
+
+???
+
+- It has a hierarchy of ownership, but it does not support structured concurrency.  E.g. parents are
+  not required to shutdown their children before they shut down.  In an asynchronous framework, I
+  would expect any object with children to have two shutdown-related states: a closing state and a
+  closed state.  The closing state is when the normal state machine operation has finished, but
+  there is still asynchronous cleanup to do (the children need to be closed), and the closed state
+  is after all child objects are already closed.
+
+????????????????
+
+- It introduces additional "weird" states.  I would expect an asynchronous framework to have to
+  worry about two lifetimes per object: when memory for an object is allocated, and when an object
+  is active (that is, after initialization ends and before the object is closed).  If you try to
+  invoke a method on a closed object that is still allocated, such as AllGather.Watch() after the
+  AllGather is closed, I would expect
+
+- it introduces an extra layer of lifetimes to worry about.  Normally you have two types of
+  lifetimes for an object: when it is allocated, and when it is alive (not closed).  A thing can be
+  dead but you can still send messages to it, and it should have well-defined mechanics as to what
+  to do if you try to pass a message to it while its closed.  E.g. calling .Watch on an AllGather
+  object that was already closed should return with an error immediately.
+*/
+
+/*
+
+func advanceState() is a proposed pattern for writing state machines.
+
+It has the following benefits:
+- It is simple and flexible.
+- Things which were once complex, like breaking an Ask into two Tells, become simple.
+- Teardown logic for the state machine, which should always be allowed at any time, is written at
+  the top of the advance() function, and therefore applies equally to every possible incoming event.
+- In the end, the physical layout of the code approximates the execution path of the code.  Not as
+  closely as a goroutine that blocks on select() calls... but that pattern doesn't work cleanly with
+  the preemption logic.
+
+Note:
+- The state machine must always be able to continue.  Error handling described for the existing
+  Allocation actor's Receive() is about right.
+*/
+
+// init is called once in PreStart
+func (a *Allocation) init(ctx *actor.Context) error {
+	RegisterAllocation(a.model.AllocationID, ctx.Self())
+	ctx.AddLabels(a.logCtx)
+
+	if a.req.Restore {
+		// Load allocation.
+		ctx.Log().Debug("RequestResources load allocation")
+		err := db.Bun().NewSelect().Model(&a.model).
+			Where("allocation_id = ?", a.model.AllocationID).
+			Scan(context.TODO())
+		if err != nil {
+			return errors.Wrap(err, "loading trial allocation")
+		}
+	} else {
+		// Insert new allocation.
+		ctx.Log().Debug("RequestResources add allocation")
+
+		a.setModelState(model.AllocationStatePending)
+		if err := a.db.AddAllocation(&a.model); err != nil {
+			return errors.Wrap(err, "saving trial allocation")
+		}
+		a._init.added = true
+
+		token, err := a.db.StartAllocationSession(a.model.AllocationID)
+		if err != nil {
+			return errors.Wrap(err, "starting a new allocation session")
+		}
+		a._init.session = true
+	}
+
+	a.req.TaskActor = ctx.Self()
+	return nil
+}
+
+// deinit is called once in PostStop
+func (a *Allocation) deinit(ctx *actor.Context) error {
+	if a._init.session {
+		if err := a.db.DeleteAllocationSession(a.model.AllocationID); err != nil {
+			ctx.Log().WithError(err).Error("error deleting allocation session")
+		}
+	}
+
+	if a._init.added {
+		_, err := db.Bun().NewDelete().Model((*ResourcesWithState)(nil)).
+			Where("allocation_id = ?", a.model.AllocationID).
+			Exec(context.TODO())
+		if err != nil {
+			ctx.Log().WithError(err).Error("error purging restorable")
+		}
+
+		a.model.EndTime = ptrs.Ptr(time.Now().UTC())
+		if err := a.db.CompleteAllocation(&a.model); err != nil {
+			ctx.Log().WithError(err).Error("failed to mark allocation completed")
+		}
+	}
+
+	if a._init.proxy {
+		a.unregisterProxies()
+	}
+
+	telemetry.ReportAllocationTerminal(
+		ctx.Self().System(), a.db, a.model, a.resources.firstDevice())
+
+	a.UnregisterAllocation(a.model.AllocationID)
+}
+
+func (a *Allocation) teardownState(ctx *actor.Context) error {
+	// undo any resources we have running or allocated
+	if a._resources.requested && !a._teardown.done {
+		if a._resources.allocated == nil {
+			// wait till resources are allocated so we can cancel them
+			// XXX: prolly we should be able to cancel them any time.
+			return nil
+		}
+
+		if a._teardown.wantKill {
+			// XXX: need kill resend logic
+			if !a._teardown.killSent {
+				for _, id := range containersStarted {
+					// XXX: is it safe to kill a container we tried to start but which hasn't started?
+					// XXX: check if resources is already exited?
+					a._resources.allocated[id].Kill()
+				}
+				a._teardown.killSent = true
+			}
+		} else if !a._teardown.preempted {
+			a.preemption.Preempt()
+			a._teardown.preempted = true
+		}
+
+		// wait for all containers to exit
+		for id, resrc := range a._resources.allocated {
+			// XXX also handle things that weren't started
+			if !resrc.Exited {
+				return nil
+			}
+		}
+
+		// release resources and stop
+		a.markResourcesReleased(ctx)
+
+		if err := a.purgeRestorableResources(ctx); err != nil {
+			ctx.Log().WithError(err).Error("failed to purge restorable resources")
+		}
+
+		// XXX fix exit message
+		a.sendEvent(ctx, sproto.Event{ExitedEvent: ptrs.Ptr("FIXME")})
+		ctx.Tell(a.rm, sproto.ResourcesReleased{TaskActor: ctx.Self()})
+
+		a._teardown.done = true
+	}
+
+	// XXX: another guard for after-stop messages
+	ctx.Self().Stop()
+	return nil
+}
+
+
+func (a *Allocation) advanceState(ctx *actor.Context) error {
+	if a._closing {
+		return a.teardownState()
+	}
+
+	// acquire resources
+	if !a._resources.done {
+		// request resources
+		if !a._resources.requested {
+			err := a.RequestResources()
+			if err != nil {
+				return err
+			}
+			a._resources.requested = true
+		}
+		// wait for resources to be assigned
+		if a._resources.assigned == nil {
+			return nil
+		}
+		// check for error sentinel
+		if a._resources.assigned == resourcesNotAssigned {
+			return errors.New("resource manager failed while attempting to acquire resources")
+		}
+		// proccess the newly assigned resources
+		err := a.ResourcesAllocated()
+		if err != nil {
+			return err
+		}
+		a._resources.done = true
+	}
+
+	// ask the task actor to build us a task spec
+	if !a._taskSpec.done {
+		// request the task spec
+		if !a._taskSpec.requested {
+			a.RequestTaskSpec()
+			a._taskSpec.requested = true
+		}
+		// wait for the spec to be built
+		if a._taskSpec.spec == nil {
+			return nil
+		}
+		// check for error sentinel
+		if a._taskSpec.spec == taskSpecNotBuilt {
+			return errors.New("parent failed while building TaskSpec")
+		}
+		err := a.StartTask()
+		if err != nil {
+			return err
+		}
+		a._taskSpec.done = true
+	}
+
+	// setup is done, wait for all non-daemon containers to exit
+
+	// XXX
+
+	// done setting up, begin normal operation
+}
+
+func (a *Allocation) close(reason string) {
+	if !a._closing {
+		a._closing = true
+		a._reason = reason
+	}
+}
+
+/* Because we are in a multithreaded paradigm which is 100% message-passing [B], we are going to
+   receive messages that mutate state and others that don't: simple getters, or registering
+   listeners... things that would be synchronous operations if we were all single-threaded [8].
+
+   The basic rule is: state is only mutated by advanceState(), which guarantees that the state
+   machine is defined in one place.  Anything which does not mutate state should be handled right
+   in Receive(), to keep advanceState() as simple as possible.
+*/
+func (a *Allocation) _receive(ctx *actor.Context) error {
+	switch msg := ctx.Message().(type) {
+	case actor.PreStart:
+		if err := a.init(ctx); err != nil {
+			// undo whatever we did, since the actor system doesn't send PostStop if PreStart fails.
+			if err2 := a.deinit(ctx); err != nil {
+				ctx.Log().WithError(err2).Error("performing all gather through master")
+			}
+			return err
+		}
+	case actor.PostStop:
+		return a.deinit(ctx)
+
+	// getters are always handled in Receive, not in AdvanceState.  Here in Receive, we know we are
+	// not in the middle of a state change, so this is a safe time to respond to getters.
+	case sproto.GetResourcesContainerState:
+		if v, ok := a.resources[msg.ResourcesID]; ok {
+			if v.container == nil {
+				ctx.Respond(fmt.Errorf("no container associated with %s", msg.ResourcesID))
+			} else {
+				ctx.Respond(*v.container)
+			}
+		} else {
+			ctx.Respond(fmt.Errorf("unknown resources %s", msg.ResourcesID))
+		}
+	case AllocationState:
+		if ctx.ExpectingResponse() {
+			ctx.Respond(a.State())
+		}
+
+	// XXX what kind of message is this?
+	case sproto.ContainerLog:
+		a.sendEvent(ctx, msg.ToEvent())
+
+	// state changing messages
+	case sproto.ResourcesAllocated:
+		a._resources.allocated = &msg
+	case tasks.TaskSpec:
+		a._taskSpec.spec = &msg
+
+	case sproto.ReleaseResources:
+		a.close("allocation being preempted by the scheduler")
+		a._teardown.wantKill = a._teardown.wantKill || msg.ForcePreemption
+
+	case sproto.ChangeRP:
+		a.close("allocation resource pool changed")
+
+	case AllocationSignal:
+		// a.HandleSignal(ctx, AllocationSignalWithReason{AllocationSignal: msg})
+		// XXX this is an empty string, right?
+		a.close("FIXME")
+		a._teardown.wantKill = a._teardown.wantKill || (msg == Kill)
+
+	case AllocationSignalWithReason:
+		a.close(ctx, msg.InformationalReason)
+		a._teardown.wantKill = a._teardown.wantKill || (msg.AllocationSignal == Kill)
+
+	case MarkResourcesDaemon:
+		if err := a.SetResourcesAsDaemon(ctx, msg.AllocationID, msg.ResourcesID); err != nil {
+			a.Error(ctx, err)
+		}
+
+	// XXX: it's not clear to me what this message is about
+	// These messages allow users (and sometimes an orchestrator, such as HP search)
+	// to interact with the allocation. The usually trace back to API calls.
+	case AllocationReady:
+		// AllocationReady only comes from the running container, so to
+		// avoid a race condition with the slower transition to running state
+		// which comes via polling for dispatcher RM, move the state to running now.
+		a.setMostProgressedModelState(model.AllocationStateRunning)
+		a.model.IsReady = ptrs.Ptr(true)
+		if err := a.db.UpdateAllocationState(a.model); err != nil {
+			a.Error(ctx, err)
+		}
+		a.sendEvent(ctx, sproto.Event{ServiceReadyEvent: ptrs.Ptr(true)})
+
+	// XXX: this message is also unclear to me
+	case SetAllocationProxyAddress:
+		if a.req.ProxyPort == nil {
+			if ctx.ExpectingResponse() {
+				ctx.Respond(ErrBehaviorUnsupported{Behavior: fmt.Sprintf("%T", msg)})
+			}
+		} else {
+			a.proxyAddress = &msg.ProxyAddress
+			a.registerProxies(ctx, a.containerProxyAddresses())
+			a._init.proxy = true
+		}
+
+	///////////////////////////
+	case sproto.ResourcesStateChanged:
+		a.ResourcesStateChanged(ctx, msg)
+	case sproto.ResourcesFailure:
+		a.RestoreResourceFailure(ctx, msg)
+
+	///////////////////////////
+
+	return a.advanceState()
+}
+
 // Receive implements actor.Actor for the allocation.
 // The normal flow of an Allocation is to:
 //	(1) request resources,
@@ -183,39 +705,40 @@ func (a *Allocation) Receive(ctx *actor.Context) error {
 	switch msg := ctx.Message().(type) {
 	// These messages handle interaction with the resource manager. The generally
 	// handle the primary allocation lifecycle/functionality.
-	case actor.PreStart:
-		RegisterAllocation(a.model.AllocationID, ctx.Self())
-		ctx.AddLabels(a.logCtx)
-		if err := a.RequestResources(ctx); err != nil {
-			a.Error(ctx, err)
-		}
-	case sproto.ResourcesAllocated:
-		if err := a.ResourcesAllocated(ctx, msg); err != nil {
-			a.Error(ctx, err)
-		}
+//	case actor.PreStart:
+//		RegisterAllocation(a.model.AllocationID, ctx.Self())
+//		ctx.AddLabels(a.logCtx)
+//		if err := a.RequestResources(ctx); err != nil {
+//			a.Error(ctx, err)
+//		}
+//	case actor.PostStop:
+//		a.Cleanup(ctx)
+//		UnregisterAllocation(a.model.AllocationID)
+
+//	case sproto.ResourcesAllocated:
+//		if err := a.ResourcesAllocated(ctx, msg); err != nil {
+//			a.Error(ctx, err)
+//		}
 	case sproto.ResourcesStateChanged:
 		a.ResourcesStateChanged(ctx, msg)
 	case sproto.ResourcesFailure:
 		a.RestoreResourceFailure(ctx, msg)
-	case sproto.GetResourcesContainerState:
-		if v, ok := a.resources[msg.ResourcesID]; ok {
-			if v.container == nil {
-				ctx.Respond(fmt.Errorf("no container associated with %s", msg.ResourcesID))
-			} else {
-				ctx.Respond(*v.container)
-			}
-		} else {
-			ctx.Respond(fmt.Errorf("unknown resources %s", msg.ResourcesID))
-		}
-	case sproto.ReleaseResources:
-		a.Terminate(ctx, "allocation being preempted by the scheduler", msg.ForcePreemption)
-	case sproto.ChangeRP:
-		a.Terminate(ctx, "allocation resource pool changed", false)
-	case actor.PostStop:
-		a.Cleanup(ctx)
-		UnregisterAllocation(a.model.AllocationID)
-	case sproto.ContainerLog:
-		a.sendEvent(ctx, msg.ToEvent())
+//	case sproto.GetResourcesContainerState:
+//		if v, ok := a.resources[msg.ResourcesID]; ok {
+//			if v.container == nil {
+//				ctx.Respond(fmt.Errorf("no container associated with %s", msg.ResourcesID))
+//			} else {
+//				ctx.Respond(*v.container)
+//			}
+//		} else {
+//			ctx.Respond(fmt.Errorf("unknown resources %s", msg.ResourcesID))
+//		}
+// 	case sproto.ReleaseResources:
+// 		a.Terminate(ctx, "allocation being preempted by the scheduler", msg.ForcePreemption)
+// 	case sproto.ChangeRP:
+// 		a.Terminate(ctx, "allocation resource pool changed", false)
+// 	case sproto.ContainerLog:
+// 		a.sendEvent(ctx, msg.ToEvent())
 
 	// These messages allow users (and sometimes an orchestrator, such as HP search)
 	// to interact with the allocation. The usually trace back to API calls.
@@ -233,14 +756,14 @@ func (a *Allocation) Receive(ctx *actor.Context) error {
 		if err := a.SetResourcesAsDaemon(ctx, msg.AllocationID, msg.ResourcesID); err != nil {
 			a.Error(ctx, err)
 		}
-	case AllocationSignal:
-		a.HandleSignal(ctx, AllocationSignalWithReason{AllocationSignal: msg})
-	case AllocationSignalWithReason:
-		a.HandleSignal(ctx, msg)
-	case AllocationState:
-		if ctx.ExpectingResponse() {
-			ctx.Respond(a.State())
-		}
+//	case AllocationSignal:
+//		a.HandleSignal(ctx, AllocationSignalWithReason{AllocationSignal: msg})
+//	case AllocationSignalWithReason:
+//		a.HandleSignal(ctx, msg)
+// 	case AllocationState:
+// 		if ctx.ExpectingResponse() {
+// 			ctx.Respond(a.State())
+// 		}
 	case SetAllocationProxyAddress:
 		if a.req.ProxyPort == nil {
 			if ctx.ExpectingResponse() {
@@ -250,6 +773,9 @@ func (a *Allocation) Receive(ctx *actor.Context) error {
 		}
 		a.proxyAddress = &msg.ProxyAddress
 		a.registerProxies(ctx, a.containerProxyAddresses())
+		a._init.proxy = true
+
+	//////// rendezvous, traffic originates from container
 	case WatchRendezvousInfo, UnwatchRendezvousInfo, rendezvousTimeout:
 		if a.rendezvous == nil {
 			if len(a.resources) == 0 {
@@ -288,6 +814,8 @@ func (a *Allocation) Receive(ctx *actor.Context) error {
 		default:
 			a.Error(ctx, actor.ErrUnexpectedMessage(ctx))
 		}
+
+	//////// generic allgather, traffic originates from container
 	case WatchAllGather, UnwatchAllGather, allGatherTimeout:
 		if a.allGather == nil {
 			switch msg.(type) {
@@ -317,6 +845,8 @@ func (a *Allocation) Receive(ctx *actor.Context) error {
 		if a.allGather.done() {
 			a.allGather = nil
 		}
+
+	//////// preemption watcher, traffic originates from container
 	case WatchPreemption, UnwatchPreemption, PreemptionTimeout, AckPreemption:
 		if !a.req.Preemptible {
 			if ctx.ExpectingResponse() {
@@ -347,30 +877,17 @@ func (a *Allocation) Receive(ctx *actor.Context) error {
 
 // RequestResources sets up the allocation.
 func (a *Allocation) RequestResources(ctx *actor.Context) error {
-	if a.req.Restore {
-		// Load allocation.
-		ctx.Log().Debug("RequestResources load allocation")
-		err := db.Bun().NewSelect().Model(&a.model).
-			Where("allocation_id = ?", a.model.AllocationID).
-			Scan(context.TODO())
-		if err != nil {
-			return errors.Wrap(err, "loading trial allocation")
-		}
-	} else {
-		// Insert new allocation.
-		ctx.Log().Debug("RequestResources add allocation")
-
-		a.setModelState(model.AllocationStatePending)
-		if err := a.db.AddAllocation(&a.model); err != nil {
-			return errors.Wrap(err, "saving trial allocation")
-		}
-	}
-
-	a.req.TaskActor = ctx.Self()
-	if err := ctx.Ask(a.rm, a.req).Error(); err != nil {
-		return errors.Wrap(err, "failed to request allocation")
-	}
-	a.sendEvent(ctx, sproto.Event{ScheduledEvent: &a.model.AllocationID})
+	// ASK ASYNC
+	// if err := ctx.Ask(a.rm, a.req).Error(); err != nil {
+	// 	return errors.Wrap(err, "failed to request allocation")
+	// }
+	resp := ctx.Ask(a.rm, a.req)
+	go func(){
+		// Tell ourselves the answer, or Tell ourselves it's not coming.
+		ans := resp.GetOrElse(resourcesNotAllocated)
+		// XXX: this is abusing the ctx object a bit
+		ctx.Tell(ctx.Self(), ans)
+	}()
 	return nil
 }
 
@@ -403,13 +920,16 @@ func (a *Allocation) Cleanup(ctx *actor.Context) {
 // ask to the parent to build its task spec.. this is mostly a hack to defer lots of computationally
 // heavy stuff unless it is necessarily (which also works to spread occurrences of the same work
 // out). Eventually, Allocations should just be started with their TaskSpec.
-func (a *Allocation) ResourcesAllocated(ctx *actor.Context, msg sproto.ResourcesAllocated) error {
+func (a *Allocation) ResourcesAllocated(ctx *actor.Context) error {
+
+	a.sendEvent(ctx, sproto.Event{ScheduledEvent: &a.model.AllocationID})
 	if !a.req.Restore {
-		if a.getModelState() != model.AllocationStatePending {
-			// If we have moved on from the pending state, these must be stale (and we must have
-			// already released them, just the scheduler hasn't gotten word yet).
-			return ErrStaleResourcesReceived{}
-		}
+		// PREFER STRUCTURAL SOLUTION
+		// if a.getModelState() != model.AllocationStatePending {
+		// 	// If we have moved on from the pending state, these must be stale (and we must have
+		// 	// already released them, just the scheduler hasn't gotten word yet).
+		// 	return ErrStaleResourcesReceived{}
+		// }
 
 		a.setModelState(model.AllocationStateAssigned)
 	} else {
@@ -417,20 +937,32 @@ func (a *Allocation) ResourcesAllocated(ctx *actor.Context, msg sproto.Resources
 	}
 
 	a.setMostProgressedModelState(model.AllocationStateAssigned)
-	if err := a.resources.append(msg.Resources); err != nil {
+	if err := a.resources.append(a._resources.Allocated.Resources); err != nil {
 		return errors.Wrapf(err, "appending resources")
 	}
+}
 
-	// Get the task spec first, so the trial/task table is populated before allocations.
-	resp := ctx.Ask(ctx.Self().Parent(), BuildTaskSpec{})
-	switch ok, err := resp.ErrorOrTimeout(time.Hour); {
-	case err != nil:
-		return errors.Wrapf(err, "could not get task spec")
-	case !ok:
-		return errors.Wrapf(err, "timeout getting task spec, likely a deadlock")
-	}
-	spec := resp.Get().(tasks.TaskSpec)
 
+func (a *Allocation) RequestTaskSpec() error {
+	// ASYNC ASK
+	// resp := ctx.Ask(ctx.Self().Parent(), BuildTaskSpec{})
+	// switch ok, err := resp.ErrorOrTimeout(time.Hour); {
+	// case err != nil:
+	// 	return errors.Wrapf(err, "could not get task spec")
+	// case !ok:
+	// 	return errors.Wrapf(err, "timeout getting task spec, likely a deadlock")
+	// }
+	// a._taskSpec := resp.Get().(tasks.TaskSpec)
+	resp := ctx.Ask()
+	go func(){
+		// Tell ourselves the answer, or Tell ourselves it's not coming.
+		ans := resp.GetOrElse(taskSpecNotBuilt)
+		// XXX: this is abusing the ctx object a bit
+		ctx.Tell(ctx.Self(), ans)
+	}()
+}
+
+func (a *Allocation) StartTask() error {
 	if err := a.db.UpdateAllocationState(a.model); err != nil {
 		return errors.Wrap(err, "updating allocation state")
 	}
@@ -461,14 +993,17 @@ func (a *Allocation) ResourcesAllocated(ctx *actor.Context, msg sproto.Resources
 			return errors.Wrap(err, "starting a new allocation session")
 		}
 
+		// XXX: This looks like if it fails, only the just-in-case code cleans it up
+		//      (advanceState should clean this up better I think)
 		for cID, r := range a.resources {
-			if err := r.Start(ctx, a.logCtx, spec, sproto.ResourcesRuntimeInfo{
+			if err := r.Start(ctx, a.logCtx, a._taskSpec, sproto.ResourcesRuntimeInfo{
 				Token:        token,
 				AgentRank:    a.resources[cID].Rank,
 				IsMultiAgent: len(a.resources) > 1,
 			}); err != nil {
 				return fmt.Errorf("starting resources (%v): %w", r, err)
 			}
+			a._init.containersStarted = append(a._init.containersStarted, cID)
 		}
 	} else if a.getModelState() == model.AllocationStateRunning {
 		// Restore proxies.
@@ -512,7 +1047,8 @@ func (a *Allocation) SetResourcesAsDaemon(
 
 	if len(a.resources.daemons()) == len(a.resources) {
 		ctx.Log().Warnf("all resources were marked as daemon, exiting")
-		a.Kill(ctx, "all resources were marked as daemon")
+		a.close("all resources were marked as daemon"):w
+		a._terminate.wantKill = true
 	}
 
 	return nil
@@ -793,7 +1329,7 @@ func (a *Allocation) registerProxies(ctx *actor.Context, addresses []cproto.Addr
 
 	for _, address := range addresses {
 		// Only proxy the port we expect to proxy. If a dockerfile uses an EXPOSE command,
-		// additional addresses will appear her, but currently we only proxy one uuid to one
+		// additional addresses will appear here, but currently we only proxy one uuid to one
 		// port, so it doesn't make sense to send multiple proxy.Register messages for a
 		// single ServiceID (only the last one would work).
 		if address.ContainerPort != cfg.Port {

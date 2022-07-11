@@ -24,13 +24,14 @@ func (i *inbox) _add(ctx *Context) {
 	i.queueEmpty.Signal()
 }
 
-func (i *inbox) tell(ctx context.Context, owner *Ref, sender *Ref, message Message) {
+func (i *inbox) tell(ctx context.Context, owner *Ref, sender *Ref, message Message) bool {
 	i.qLock.Lock()
 	defer i.qLock.Unlock()
 	if i.closed {
-		return
+		return false
 	}
 	i._add(wrap(ctx, owner, sender, message, nil))
+	return true
 }
 
 func (i *inbox) ask(ctx context.Context, owner *Ref, sender *Ref, message Message) Response {

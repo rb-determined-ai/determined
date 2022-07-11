@@ -40,9 +40,10 @@ func (c *Context) AddLabels(ctx logger.Context) {
 }
 
 // Tell sends the specified message to the actor (fire-and-forget semantics). The new context's
-// sender is set to the recipient of this context.
-func (c *Context) Tell(actor *Ref, message Message) {
-	actor.tell(c.inner, c.recipient, message)
+// sender is set to the recipient of this context.  It returns whether or not the actor was alive to
+// read the message.
+func (c *Context) Tell(actor *Ref, message Message) bool {
+	return actor.tell(c.inner, c.recipient, message)
 }
 
 // TellAll sends the specified message to all actors (fire-and-forget semantics).

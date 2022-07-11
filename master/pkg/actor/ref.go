@@ -141,6 +141,13 @@ func (r *Ref) tell(ctx context.Context, sender *Ref, message Message) {
 	r.inbox.tell(ctx, r, sender, message)
 }
 
+func (r *Ref) tell(ctx context.Context, sender *Ref, message Message) bool {
+	if traceEnabled {
+		ctx = traceSend(ctx, sender, r, message, tellOperation)
+	}
+	return r.inbox.tell(ctx, r, sender, message)
+}
+
 func (r *Ref) ask(ctx context.Context, sender *Ref, message Message) Response {
 	if traceEnabled {
 		ctx = traceSend(ctx, sender, r, message, askOperation)

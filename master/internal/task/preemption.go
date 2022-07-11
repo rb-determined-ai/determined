@@ -17,6 +17,10 @@ var (
 	errNoPreemptionStatus     = errors.New("no preemption status available for unallocated task")
 )
 
+var (
+	// WatchPreemption
+)
+
 type (
 	// WatchPreemption begins watching if the task has been preempted.
 	// The task responds to this message with a channel of bools, where sends of true
@@ -36,7 +40,7 @@ type (
 	// preempted.
 	PreemptionTimeout struct{ allocationID model.AllocationID }
 
-	// Preemption represents the preemption status of an allocation. An alllocation is assumed to be
+	// Preemption represents the preemption status of an allocation. An allocation is assumed to be
 	// preempted exactly one time. The object is "nil safe" - it'll gracefully handle calls on a nil
 	// preemption. This is nice until we move to trial has many task actors / generic task actor, where
 	// the lifetime of a "preemption" is equivalent to the lifetime of allocation and they can be
