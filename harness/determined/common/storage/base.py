@@ -38,12 +38,16 @@ class StorageManager(metaclass=abc.ABCMeta):
         return cls(**config)
 
     @abc.abstractmethod
-    def post_store_path(self, src: str, dst: str) -> None:
+    def post_store_path(
+        self, src: str, dst: str, selector: Optional[Callable[[str], bool]] = None
+    ) -> None:
         """
         post_store_path is a hook that will be called after store_path(). Subclasess of
         StorageManager should override this in order to customize the behavior of store_path().
         """
         pass
+
+    def pre_store_path(self, dst: str) -> pathlib.Path:
 
     @contextlib.contextmanager
     def store_path(self, dst: str) -> Iterator[pathlib.Path]:
@@ -85,7 +89,12 @@ class StorageManager(metaclass=abc.ABCMeta):
         pass
 
     @abc.abstractmethod
-    def upload(self, src: Union[str, os.PathLike], dst: str) -> None:
+    def upload(
+        self,
+        src: Union[str, os.PathLike],
+        dst: str,
+        selector: Optional[Callable[[str], bool]] = None,
+    ) -> None:
         pass
 
     @abc.abstractmethod
