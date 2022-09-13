@@ -108,7 +108,7 @@ class CheckpointContext:
         ckpt_dir: Union[str, os.PathLike],
         metadata: Optional[Dict[str, Any]] = None,
         *,
-        shard: bool,
+        shard: bool=False,
     ) -> str:
         """
         ``upload()`` chooses a random ``storage_id``, then uploads the contents of ``ckpt_dir`` to
@@ -127,9 +127,6 @@ class CheckpointContext:
 
         if ckpt_dir is not None:
             ckpt_dir = os.fspath(ckpt_dir)
-
-
-
 
         # The simple and sharded cases can technically be written as one function but it becomes
         # far more complicated than having two codepaths.
@@ -210,18 +207,21 @@ class CheckpointContext:
         metadata_writer_rank = ckpt_dir_mask.index(True)
         if self._dist.rank == metadata_writer_rank:
             assert ckpt_dir is not None:
+            # We don't need to synchronize workers at this point because the metadata_writer_rank
+            # will also be the uploader for its own directory.
+            assert want_upload
             # Add metadata pre-upload but without counting it among resources.
             self._write_metadata_file(ckpt_dir, metadata or {})
-            # XXX: merge metadata too
 
-        if ckpt_dir is not None:
+        if want_upload:
+            assert ckpt_dir
             self._storage_manager.upload(src=ckpt_dir, dst=storage_id)
-
-        if self._dist.rank == 0:
-            self._report_checkpoint(storage_id, merged_resources, metadata)
 
         # synchronize workers
         _ = self._dist.allgather(None)
+
+        if self._dist.rank == 0:
+            self._report_checkpoint(storage_id, merged_resources, metadata)
 
         return storage_id
 
@@ -367,11 +367,15 @@ class CheckpointContext:
         metadata_writer_rank = ckpt_dir_mask.index(True)
         if self._dist.rank == metadata_writer_rank:
             assert ckpt_dir is not None:
+            # We don't need to synchronize workers at this point because the metadata_writer_rank
+            # will also be the uploader for its own directory.
+            assert want_upload
             # Add metadata pre-upload but without counting it among resources.
             self._write_metadata_file(ckpt_dir, metadata or {})
             # XXX: merge metadata too
 
-        if ckpt_dir is not None:
+        if want_upload:
+            assert ckpt_dir
             self._storage_manager.upload(src=ckpt_dir, dst=storage_id)
 
         if self._dist.rank == 0:
