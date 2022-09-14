@@ -3,11 +3,13 @@ import contextlib
 import faulthandler
 import logging
 import sys
-from typing import Iterator
+from typing import Iterator, Optional, Dict
 
 import determined as det
-from determined import core, horovod, load
+from determined import core, horovod, load, pytorch
 from determined.common.api import analytics, certs
+from determined.pytorch import PyTorchTrial, PyTorchTrialController, PyTorchTrialContext
+from determined.pytorch._pytorch_trial import TrainUnit
 
 
 @contextlib.contextmanager
@@ -28,6 +30,10 @@ def main(train_entrypoint: str) -> int:
 
     # TODO: refactor data_layer, and profiling to to not use the cli_cert.
     certs.cli_cert = certs.default_load(info.master_url)
+
+    trial_class = load.trial_class_from_entrypoint(train_entrypoint)
+    if issubclass(trial_class, PyTorchTrial):
+        create_pytorch_trial_controller_and_context(info)
 
     # TODO: Don't include EnvContext object in the future high-level APIs for PyTorch or Keras.
     # It was natural to create this big-blob-of-config object, but it was a mistake to pass it into
@@ -107,22 +113,77 @@ def main(train_entrypoint: str) -> int:
             preempt_mode=core.PreemptMode.ChiefOnly,
             tensorboard_mode=core.TensorboardMode.MANUAL,
         ) as core_context:
-            trial_context = trial_class.trial_context_class(core_context, env)
+            if isinstance(trial_class, PyTorchTrial):
+                trial_context = PyTorchTrialContext.from_env(env_context=env, core_context=core_context)
+            else:
+                trial_context = trial_class.trial_context_class(core_context, env)
 
             # Step 4: Instantiate the user's Trial.
             trial_inst = trial_class(trial_context)
 
             # Step 5: Create a TrialController and execute training
             logging.info(f"Creating {controller_class.__name__} with {trial_class.__name__}.")
-            controller = controller_class.from_trial(
-                trial_inst=trial_inst,
-                context=trial_context,
-                env=env,
-            )
+
+            if isinstance(trial_class, PyTorchTrial):
+                controller = PyTorchTrialController.from_env(trial_inst=trial_inst,
+                                                             context=trial_context,
+                                                             env=env)
+            else:
+                controller = controller_class.from_trial(
+                    trial_inst=trial_inst,
+                    context=trial_context,
+                    env=env,
+                )
 
             controller.run()
 
     return 0
+
+
+def create_pytorch_trial_controller_and_context(min_checkpoint_period: int,
+                                                min_validation_period: int,
+                                                searcher_metric_name: str,
+                                                average_training_metrics: bool,
+                                                checkpoint_policy: str,
+                                                smaller_is_better: bool,
+                                                steps_completed: Optional[int] = None,
+                                                latest_checkpoint: Optional[str] = None,
+                                                test_mode: Optional[bool] = False,
+                                                hparams: Optional[Dict] = None,
+                                                slots_per_trial: Optional[int] = 0,
+                                                num_gpus: Optional[int] = 0,
+                                                core_context: det.core.Context = None,
+                                                exp_conf: Optional[Dict] = None,
+                                                aggregation_frequency: Optional[int] = 1,
+                                                fp16_compression: Optional[bool] = False,
+                                                average_aggregated_gradients: Optional[bool] = False
+                                                ):
+
+    trial_context = PyTorchTrialContext(hparams=hparams,
+                                        core_context=core_context,
+                                        slots_per_trial=slots_per_trial,
+                                        num_gpus=num_gpus,
+                                        exp_conf=exp_conf,
+                                        aggregation_frequency=aggregation_frequency,
+                                        fp16_compression=fp16_compression,
+                                        average_aggregated_gradients=average_aggregated_gradients)
+    trial_inst = PyTorchTrial(trial_context)
+    controller = PyTorchTrialController(
+        trial_inst=trial_inst,
+        context=trial_context,
+        min_checkpoint_period=min_checkpoint_period,
+        min_validation_period=min_validation_period,
+        searcher_metric_name=searcher_metric_name,
+        average_training_metrics=average_training_metrics,
+        checkpoint_policy=checkpoint_policy,
+        smaller_is_better=smaller_is_better,
+        steps_completed=steps_completed,
+        latest_checkpoint=latest_checkpoint,
+        local_training=False,
+        test_mode=test_mode,
+    )
+
+    return controller, trial_context
 
 
 if __name__ == "__main__":

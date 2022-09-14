@@ -3,11 +3,12 @@ import logging
 import os
 import pathlib
 import sys
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Type
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Type, cast
 
 import determined as det
 from determined import constants, core, gpu, load
 from determined.common import api
+from determined.pytorch import PyTorchTrial, PyTorchTrialContext
 
 
 class InvalidHP(Exception):
@@ -180,4 +181,23 @@ def _load_trial_for_checkpoint_export(
             hparams=hparams,
         )
         trial_context = trial_class.trial_context_class(core_context, env)
+    return trial_class, trial_context
+
+def _load_pytorch_trial_for_checkpoint_export(
+    context_dir: pathlib.Path,
+    managed_training: bool,
+    trial_cls_spec: str,
+    config: Dict[str, Any],
+    hparams: Dict[str, Any],
+) -> Tuple[Type[PyTorchTrial], PyTorchTrialContext]:
+    with _local_execution_manager(context_dir):
+        trial_class = load.trial_class_from_entrypoint(trial_cls_spec)
+        core_context, env = _make_local_execution_env(
+            managed_training=managed_training,
+            test_mode=False,
+            config=config,
+            checkpoint_dir="/tmp",
+            hparams=hparams,
+        )
+        trial_context = PyTorchTrialContext.from_env(env_context=env, core_context=core_context)
     return trial_class, trial_context

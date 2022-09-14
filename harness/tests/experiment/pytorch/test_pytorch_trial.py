@@ -1,6 +1,7 @@
 # type: ignore
 import os
 import pathlib
+import sys
 import typing
 
 import numpy as np
@@ -67,110 +68,114 @@ class TestPyTorchTrial:
     def test_onevar_single(self) -> None:
         """Assert that the training loss and validation error decrease monotonically."""
 
-        def make_workloads() -> workload.Stream:
-            trainer = utils.TrainAndValidate()
+        class TrainingMetricsCallback(pytorch.PyTorchCallback):
+            def __init__(self):
+                self.steps = 0
+                self.metrics = []
 
-            yield from trainer.send(steps=100, validation_freq=10)
-            training_metrics, validation_metrics = trainer.result()
-
-            # Check the gradient update at every step.
-            for idx, batch_metrics in enumerate(training_metrics):
+            def on_training_workload_end(
+                self, avg_metrics: typing.Dict[str, typing.Any], batch_metrics: typing.Dict[str, typing.Any]
+            ) -> None:
+                self.metrics.append(batch_metrics[0])
                 pytorch_onevar_model.OneVarTrial.check_batch_metrics(
-                    batch_metrics,
-                    idx,
+                    batch_metrics[0],
+                    self.steps,
                     metric_keyname_pairs=(("loss", "loss_exp"), ("w_after", "w_exp")),
                 )
+                self.steps += 1
 
-            for older, newer in zip(training_metrics, training_metrics[1:]):
-                assert newer["loss"] <= older["loss"]
+            def on_trial_shutdown(self) -> None:
+                for older, newer in zip(self.metrics, self.metrics[1:]):
+                    assert newer["loss"] <= older["loss"]
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        def build_callbacks(self) -> typing.Dict[str, pytorch.PyTorchCallback]:
+            return {"metricsCallback": TrainingMetricsCallback()}
+
+        setattr(pytorch_onevar_model.OneVarTrial, "build_callbacks", build_callbacks)
+
+        utils.run_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrial,
             hparams=self.hparams,
-            workloads=make_workloads(),
             trial_seed=self.trial_seed,
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
-        controller.run()
 
     def test_multi_validation(self) -> None:
-        def make_workloads() -> workload.Stream:
-            trainer = utils.TrainAndValidate()
+        class ValidationMetricsCallback(pytorch.PyTorchCallback):
+            def __init__(self):
+                self.steps = 0
+                self.metrics = []
 
-            yield from trainer.send(steps=10, validation_freq=10)
-            training_metrics, validation_metrics = trainer.result()
-
-            for metrics in validation_metrics:
+            def on_validation_end(self, metrics: typing.Dict[str, typing.Any]) -> None:
                 assert "mse" in metrics
                 assert "val_loss" in metrics
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        def build_callbacks(self) -> typing.Dict[str, pytorch.PyTorchCallback]:
+            return {"metricsCallback": ValidationMetricsCallback()}
+
+        setattr(pytorch_onevar_model.OneVarTrialWithMultiValidation, "build_callbacks", build_callbacks)
+
+        utils.run_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrialWithMultiValidation,
             hparams=self.hparams,
-            workloads=make_workloads(),
             trial_seed=self.trial_seed,
+            max_batches=10,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
-        controller.run()
 
     def test_training_metrics(self) -> None:
-        def make_workloads() -> workload.Stream:
-            trainer = utils.TrainAndValidate()
+        class TrainingMetricsCallback(pytorch.PyTorchCallback):
 
-            yield from trainer.send(steps=10, validation_freq=10)
-            training_metrics, validation_metrics = trainer.result()
+            def on_training_workload_end(
+                self, avg_metrics: typing.Dict[str, typing.Any], batch_metrics: typing.Dict[str, typing.Any]
+            ) -> None:
+                for metrics in batch_metrics:
+                    assert "mse" in metrics
 
-            for metrics in training_metrics:
-                assert "mse" in metrics
+        def build_callbacks(self) -> typing.Dict[str, pytorch.PyTorchCallback]:
+            return {"metricsCallback": TrainingMetricsCallback()}
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        setattr(pytorch_onevar_model.OneVarTrialWithTrainingMetrics, "build_callbacks", build_callbacks)
+
+        utils.run_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrialWithTrainingMetrics,
             hparams=self.hparams,
-            workloads=make_workloads(),
             trial_seed=self.trial_seed,
+            max_batches=10,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
-        controller.run()
 
     def test_nonscalar_validation(self) -> None:
-        def make_workloads() -> workload.Stream:
-            trainer = utils.TrainAndValidate()
+        class ValidationMetricsCallback(pytorch.PyTorchCallback):
 
-            yield from trainer.send(steps=10, validation_freq=10)
-            training_metrics, validation_metrics = trainer.result()
-
-            for metrics in validation_metrics:
+            def on_validation_end(self, metrics: typing.Dict[str, typing.Any]) -> None:
                 assert "mse" in metrics
-                assert "predictions" in metrics
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        def build_callbacks(self) -> typing.Dict[str, pytorch.PyTorchCallback]:
+            return {"metricsCallback": ValidationMetricsCallback()}
+
+        setattr(pytorch_onevar_model.OneVarTrialWithNonScalarValidation, "build_callbacks", build_callbacks)
+
+        utils.run_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrialWithNonScalarValidation,
             hparams=self.hparams,
-            workloads=make_workloads(),
             trial_seed=self.trial_seed,
             expose_gpus=True,
+            max_batches=10,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
-        controller.run()
 
     def test_checkpointing_and_restoring(self, tmp_path: pathlib.Path) -> None:
-        def make_trial_controller_fn(
-            workloads: workload.Stream,
-            checkpoint_dir: typing.Optional[str] = None,
-            latest_checkpoint: typing.Optional[str] = None,
-            steps_completed: int = 0,
-        ) -> det.TrialController:
-            updated_hparams = {
-                "lr_scheduler_step_mode": pytorch.LRScheduler.StepMode.STEP_EVERY_BATCH.value,
-                **self.hparams,
-            }
-            return utils.make_trial_controller_from_trial_implementation(
-                trial_class=pytorch_onevar_model.OneVarTrialWithLRScheduler,
-                hparams=updated_hparams,
-                workloads=workloads,
-                trial_seed=self.trial_seed,
-                checkpoint_dir=checkpoint_dir,
-                latest_checkpoint=latest_checkpoint,
-                steps_completed=steps_completed,
-            )
-
-        utils.checkpointing_and_restoring_test(make_trial_controller_fn, tmp_path)
+        updated_hparams = {
+            "lr_scheduler_step_mode": pytorch.LRScheduler.StepMode.STEP_EVERY_BATCH.value,
+            **self.hparams,
+        }
+        self.checkpoint_and_restore(updated_hparams, tmp_path, (100, 100))
 
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="no gpu available")
     @pytest.mark.gpu
@@ -191,86 +196,74 @@ class TestPyTorchTrial:
         if trial_class is pytorch_onevar_model.OneVarApexAMPTrial and not HAVE_APEX:
             pytest.skip("Apex not available")
 
-        def make_trial_controller_fn(
-            workloads: workload.Stream,
-            checkpoint_dir: typing.Optional[str] = None,
-            latest_checkpoint: typing.Optional[str] = None,
-            steps_completed: int = 0,
-        ) -> det.TrialController:
-            updated_hparams = dict(self.hparams)
-            updated_hparams["global_batch_size"] = 1
+        updated_hparams = {
+            "global_batch_size": 1,
+            **self.hparams,
+        }
 
-            return utils.make_trial_controller_from_trial_implementation(
-                trial_class=trial_class,
-                hparams=updated_hparams,
-                workloads=workloads,
-                trial_seed=self.trial_seed,
-                checkpoint_dir=checkpoint_dir,
-                latest_checkpoint=latest_checkpoint,
-                steps_completed=steps_completed,
-                expose_gpus=True,
-            )
+        tm_a, tm_b = utils.checkpoint_and_restore(hparams=updated_hparams, tmp_path=tmp_path, steps=(200, 200))
 
-        tm_A, tm_B = utils.checkpointing_and_restoring_test(
-            make_trial_controller_fn,
-            tmp_path,
-            steps=(2, 2),
-            scheduling_unit=1,
-        )
-        amp_metrics_test(trial_class, tm_A)
-        amp_metrics_test(trial_class, tm_B)
+        amp_metrics_test(trial_class, tm_a)
+        amp_metrics_test(trial_class, tm_b)
 
     def test_restore_invalid_checkpoint(self, tmp_path: pathlib.Path) -> None:
         # Build, train, and save a checkpoint with the normal hyperparameters.
         checkpoint_dir = str(tmp_path.joinpath("checkpoint"))
-        latest_checkpoint = None
-        steps_completed = 0
 
-        def make_workloads() -> workload.Stream:
-            trainer = utils.TrainAndValidate()
-            yield from trainer.send(steps=1, validation_freq=1)
-            interceptor = workload.WorkloadResponseInterceptor()
-            yield from interceptor.send(workload.checkpoint_workload())
-            nonlocal latest_checkpoint, steps_completed
-            latest_checkpoint = interceptor.metrics_result()["uuid"]
-            steps_completed = trainer.get_steps_completed()
+        class CheckpointingCallback(pytorch.PyTorchCallback):
+            def __init__(self):
+                self.uuid = None
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+            def on_checkpoint_upload_end(self, uuid: str) -> None:
+                self.uuid = uuid
+
+        checkpoint_callback = CheckpointingCallback()
+
+        def build_callbacks(self) -> typing.Dict[str, pytorch.PyTorchCallback]:
+            return {"checkpoint": checkpoint_callback}
+
+        setattr(pytorch_onevar_model.OneVarTrial, "build_callbacks", build_callbacks)
+
+        # Trial A: run with 100 batches and checkpoint
+        trial_A = utils.run_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrial,
             hparams=self.hparams,
-            workloads=make_workloads(),
             trial_seed=self.trial_seed,
-            checkpoint_dir=checkpoint_dir,
+            max_batches=100,
+            min_validation_batches=100,
+            min_checkpoint_batches=100,
+            checkpoint_dir=checkpoint_dir
         )
-        controller.run()
 
-        # Verify that an invalid architecture fails to load from the checkpoint.
-        def make_invalid_workloads() -> workload.Stream:
-            trainer = utils.TrainAndValidate()
-            yield from trainer.send(steps=1, validation_freq=1)
+        assert checkpoint_callback.uuid is not None, "trial did not return a checkpoint UUID"
 
+        # Trial A: restore from checkpoint with invalid hparams
         invalid_hparams = {**self.hparams, "features": 2}
         assert invalid_hparams != self.hparams
 
         with pytest.raises(RuntimeError):
-            invalid_controller = utils.make_trial_controller_from_trial_implementation(
+            utils.run_pytorch_trial_controller_from_trial_impl(
                 trial_class=pytorch_onevar_model.OneVarTrial,
                 hparams=invalid_hparams,
-                workloads=make_invalid_workloads(),
                 trial_seed=self.trial_seed,
+                max_batches=100,
+                min_validation_batches=100,
+                min_checkpoint_batches=sys.maxsize,
                 checkpoint_dir=checkpoint_dir,
-                latest_checkpoint=latest_checkpoint,
-                steps_completed=steps_completed,
+                latest_checkpoint=checkpoint_callback.uuid,
+                steps_completed=trial_A.state.batches_trained,
             )
-            invalid_controller.run()
 
     def test_reproducibility(self) -> None:
         def controller_fn(workloads: workload.Stream) -> det.TrialController:
-            return utils.make_trial_controller_from_trial_implementation(
+            return utils.make_pytorch_trial_controller_from_trial_impl(
                 trial_class=pytorch_onevar_model.OneVarTrial,
                 hparams=self.hparams,
                 workloads=workloads,
                 trial_seed=self.trial_seed,
+                max_batches=100,
+                min_validation_batches=10,
+                min_checkpoint_batches=sys.maxsize,
             )
 
         _ = utils.reproducibility_test(controller_fn, steps=1000, validation_freq=100)
@@ -287,20 +280,24 @@ class TestPyTorchTrial:
             training_metrics[tag] = tm
             validation_metrics[tag] = vm
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrial,
             hparams=self.hparams,
-            workloads=make_workloads("A"),
             trial_seed=self.trial_seed,
+            max_batches=900,
+            min_validation_batches=100,
+            min_checkpoint_batches=sys.maxsize,
         )
         controller.run()
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrialCustomEval,
             hparams=self.hparams,
-            workloads=make_workloads("B"),
             trial_seed=self.trial_seed,
             expose_gpus=True,
+            max_batches=900,
+            min_validation_batches=100,
+            min_checkpoint_batches=sys.maxsize,
         )
         controller.run()
 
@@ -322,20 +319,24 @@ class TestPyTorchTrial:
             training_metrics[tag] = tm
             validation_metrics[tag] = vm
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrialGradClipping,
             hparams=self.hparams,
-            workloads=make_workloads("original"),
             trial_seed=self.trial_seed,
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
         controller.run()
 
         updated_hparams = {"gradient_clipping_l2_norm": 0.0001, **self.hparams}
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrialGradClipping,
             hparams=updated_hparams,
-            workloads=make_workloads("clipped_by_norm"),
             trial_seed=self.trial_seed,
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
         controller.run()
 
@@ -347,11 +348,13 @@ class TestPyTorchTrial:
             assert original["loss"] != clipped["loss"]
 
         updated_hparams = {"gradient_clipping_value": 0.0001, **self.hparams}
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrialGradClipping,
             hparams=updated_hparams,
-            workloads=make_workloads("clipped_by_val"),
             trial_seed=self.trial_seed,
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
         controller.run()
 
@@ -367,13 +370,14 @@ class TestPyTorchTrial:
             trainer = utils.TrainAndValidate()
             yield from trainer.send(steps=2, validation_freq=1, scheduling_unit=1)
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        utils.run_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrialPerMetricReducers,
             hparams=self.hparams,
-            workloads=make_workloads(),
             trial_seed=self.trial_seed,
+            max_batches=2,
+            min_validation_batches=1,
+            min_checkpoint_batches=sys.maxsize,
         )
-        controller.run()
 
     def test_callbacks(self, tmp_path: pathlib.Path) -> None:
         checkpoint_dir = tmp_path.joinpath("checkpoint")
@@ -449,11 +453,13 @@ class TestPyTorchTrial:
                 "legacy_on_training_epochs_start_calls": 2
             }
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrialCallbacks,
             hparams=hparams1,
-            workloads=make_workloads1(),
             checkpoint_dir=str(checkpoint_dir),
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
         controller.run()
         assert controller.trial.counter.trial_shutdowns == 1
@@ -469,13 +475,15 @@ class TestPyTorchTrial:
         def make_workloads2() -> workload.Stream:
             yield workload.train_workload(1, 1, 0, num_batches), workload.ignore_workload_response
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrialCallbacks,
             hparams=self.hparams,
-            workloads=make_workloads2(),
             checkpoint_dir=str(checkpoint_dir),
             latest_checkpoint=latest_checkpoint,
             steps_completed=steps_completed,
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
         controller.run()
         assert controller.trial.counter.__dict__ == {
@@ -512,11 +520,13 @@ class TestPyTorchTrial:
         hparams["lr_scheduler_step_mode"] = lr_scheduler_step_mode
         hparams["global_batch_size"] = 64
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrialAccessContext,
             hparams=hparams,
-            workloads=make_workloads(),
             trial_seed=self.trial_seed,
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
         controller.run()
 
@@ -541,11 +551,13 @@ class TestPyTorchTrial:
                 training_metrics.extend(batch_metrics)
                 total_batches_processed += num_batches
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrial,
             hparams=self.hparams,
-            workloads=make_workloads(),
             trial_seed=self.trial_seed,
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
         controller.run()
 
@@ -576,11 +588,13 @@ class TestPyTorchTrial:
                 assert "fn_reducer" in metrics
                 assert metrics["fn_reducer"] == expect
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrial,
             hparams=self.hparams,
-            workloads=make_workloads(),
             trial_seed=self.trial_seed,
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
         controller.run()
 
@@ -589,11 +603,13 @@ class TestPyTorchTrial:
             trainer = utils.TrainAndValidate()
             yield from trainer.send(steps=1, validation_freq=1, scheduling_unit=1)
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrial,
             hparams=self.hparams,
-            workloads=make_workloads(),
             trial_seed=self.trial_seed,
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
 
         def reducer_fn(_):
@@ -613,11 +629,13 @@ class TestPyTorchTrial:
             trainer = utils.TrainAndValidate()
             yield from trainer.send(steps=1, validation_freq=1, scheduling_unit=1)
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrial,
             hparams=self.hparams,
-            workloads=make_workloads(),
             trial_seed=self.trial_seed,
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
 
         def reducer_fn(_):
@@ -640,11 +658,13 @@ class TestPyTorchTrial:
         hparams["disable_dataset_reproducibility_checks"] = False
 
         with pytest.raises(RuntimeError, match="you can disable this check by calling"):
-            controller = utils.make_trial_controller_from_trial_implementation(
+            controller = utils.make_pytorch_trial_controller_from_trial_impl(
                 trial_class=pytorch_onevar_model.OneVarTrial,
                 hparams=hparams,
-                workloads=make_workloads(),
                 trial_seed=self.trial_seed,
+                max_batches=100,
+                min_validation_batches=10,
+                min_checkpoint_batches=sys.maxsize,
             )
             controller.run()
 
@@ -672,11 +692,13 @@ class TestPyTorchTrial:
         hparams["dataloader_type"] = "torch"
         hparams["disable_dataset_reproducibility_checks"] = True
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             trial_class=pytorch_onevar_model.OneVarTrial,
             hparams=hparams,
-            workloads=make_workloads(),
             trial_seed=self.trial_seed,
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
         controller.run()
 
@@ -714,12 +736,14 @@ class TestPyTorchTrial:
             for older, newer in zip(training_metrics, training_metrics[1:]):
                 assert newer["loss"] <= older["loss"]
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             exp_config=exp_config,
             trial_class=pytorch_onevar_model.OneVarTrial,
             hparams=self.hparams,
-            workloads=make_workloads(),
             trial_seed=self.trial_seed,
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
         controller.run()
 
@@ -764,12 +788,14 @@ class TestPyTorchTrial:
             nonlocal training_metrics
             training_metrics, _ = trainer.result()
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             trial_class=trial_class,
             hparams=hparams,
-            workloads=make_amp_workloads(),
             trial_seed=self.trial_seed,
             expose_gpus=True,
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
         controller.run()
 
@@ -820,17 +846,118 @@ class TestPyTorchTrial:
             nonlocal training_metrics
             training_metrics, _ = trainer.result()
 
-        controller = utils.make_trial_controller_from_trial_implementation(
+        controller = utils.make_pytorch_trial_controller_from_trial_impl(
             exp_config=exp_config,
             trial_class=trial_class,
             hparams=hparams,
-            workloads=make_amp_workloads(),
             trial_seed=self.trial_seed,
             expose_gpus=True,
+            max_batches=100,
+            min_validation_batches=10,
+            min_checkpoint_batches=sys.maxsize,
         )
         controller.run()
 
         amp_metrics_test(trial_class, training_metrics, agg_freq=AGG_FREQ)
+
+    def checkpoint_and_restore(
+        self, hparams: typing.Dict,
+        tmp_path: pathlib.Path,
+        steps: typing.Tuple[int, int] = (1, 1)
+    ) -> typing.Tuple[typing.Sequence[typing.Dict[str, typing.Any]], typing.Sequence[typing.Dict[str, typing.Any]]]:
+        checkpoint_dir = str(tmp_path.joinpath("checkpoint"))
+        training_metrics = {"A": [], "B": []}
+        validation_metrics = {"A": [], "B": []}
+
+        class MetricsCallback(pytorch.PyTorchCallback):
+            def __init__(self):
+                self.training_metrics = []
+                self.validation_metrics = []
+
+            def on_training_workload_end(
+                self, avg_metrics: typing.Dict[str, typing.Any], batch_metrics: typing.Dict[str, typing.Any]
+            ) -> None:
+                self.training_metrics.append(batch_metrics[0])
+
+            def on_validation_end(self, metrics: typing.Dict[str, typing.Any]) -> None:
+                self.validation_metrics.append(metrics)
+
+        class CheckpointingCallback(pytorch.PyTorchCallback):
+            def __init__(self):
+                self.uuid = None
+
+            def on_checkpoint_upload_end(self, uuid: str) -> None:
+                self.uuid = uuid
+
+        checkpoint_callback = CheckpointingCallback()
+        metrics_callback = MetricsCallback()
+
+        def build_callbacks(self) -> typing.Dict[str, pytorch.PyTorchCallback]:
+            return {"checkpoint": checkpoint_callback, "metrics": metrics_callback}
+
+        setattr(pytorch_onevar_model.OneVarTrialWithLRScheduler, "build_callbacks", build_callbacks)
+
+        # Trial A: run with 100 batches and checkpoint
+        trial_A = utils.run_pytorch_trial_controller_from_trial_impl(
+            trial_class=pytorch_onevar_model.OneVarTrialWithLRScheduler,
+            hparams=hparams,
+            trial_seed=self.trial_seed,
+            max_batches=steps[0],
+            min_validation_batches=steps[0],
+            min_checkpoint_batches=steps[0],
+            checkpoint_dir=checkpoint_dir
+        )
+
+        assert checkpoint_callback.uuid is not None, "trial did not return a checkpoint UUID"
+
+        # Trial A: restore from checkpoint
+        trial_A = utils.run_pytorch_trial_controller_from_trial_impl(
+            trial_class=pytorch_onevar_model.OneVarTrialWithLRScheduler,
+            hparams=hparams,
+            trial_seed=self.trial_seed,
+            max_batches=steps[1],
+            min_validation_batches=steps[1],
+            min_checkpoint_batches=sys.maxsize,
+            checkpoint_dir=checkpoint_dir,
+            latest_checkpoint=checkpoint_callback.uuid,
+            steps_completed=trial_A.state.batches_trained,
+        )
+
+        assert len(metrics_callback.training_metrics) == steps[0] + steps[1], "training metrics returned did not match expected length"
+
+        training_metrics["A"] = metrics_callback.training_metrics
+        validation_metrics["A"] = metrics_callback.validation_metrics
+
+        # Clear callback state
+        checkpoint_callback = CheckpointingCallback()
+        metrics_callback = MetricsCallback()
+
+        def build_callbacks(self) -> typing.Dict[str, pytorch.PyTorchCallback]:
+            return {"checkpoint": checkpoint_callback, "metrics": metrics_callback}
+
+        setattr(pytorch_onevar_model.OneVarTrialWithLRScheduler, "build_callbacks", build_callbacks)
+
+        # Trial B: run for 200 steps
+        trial_B = utils.run_pytorch_trial_controller_from_trial_impl(
+            trial_class=pytorch_onevar_model.OneVarTrialWithLRScheduler,
+            hparams=hparams,
+            trial_seed=self.trial_seed,
+            max_batches=steps[0] + steps[1],
+            min_validation_batches=steps[0] + steps[1],
+            min_checkpoint_batches=sys.maxsize,
+            checkpoint_dir=checkpoint_dir
+        )
+
+        training_metrics["B"] = metrics_callback.training_metrics
+        validation_metrics["B"] = metrics_callback.validation_metrics
+
+        for A, B in zip(training_metrics["A"], training_metrics["B"]):
+            utils.assert_equivalent_metrics(A, B)
+
+        for A, B in zip(validation_metrics["A"], validation_metrics["B"]):
+            utils.assert_equivalent_metrics(A, B)
+
+        return (training_metrics["A"], training_metrics["B"])
 
 
 @pytest.mark.parametrize(

@@ -1053,3 +1053,26 @@ class GpuMemoryCollector:
         except Exception as e:
             logging.warning(f"{LOG_NAMESPACE}: error while measuring GPU memory: {e}")
             return {}
+
+
+class DummyProfilerAgent(ProfilerAgent):
+    def __init__(self):
+        pass
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    @contextlib.contextmanager
+    def record_timing(
+        self, metric_name: str, accumulate: bool = False, requires_sync: bool = True
+    ) -> Iterator[None]:
+        yield contextlib.nullcontext()
+
+    def update_batch_idx(self, batch_idx: int):
+        pass
+
+    def record_metric(self, metric_name: str, value: float) -> None:
+        pass

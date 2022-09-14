@@ -73,7 +73,7 @@ def load_trial_from_checkpoint_path(path: str, **kwargs: Any) -> pytorch.PyTorch
             "metadata file for loading a legacy checkpoint."
         )
 
-    trial_cls, trial_context = det._load_trial_for_checkpoint_export(
+    trial_cls, trial_context = det._load_pytorch_trial_for_checkpoint_export(
         ckpt_dir.joinpath("code"),
         managed_training=False,
         trial_cls_spec=trial_cls_spec,
@@ -112,3 +112,4 @@ def load_trial_from_checkpoint_path(path: str, **kwargs: Any) -> pytorch.PyTorch
     for idx, model in enumerate(trial_context.models):
         model.load_state_dict(checkpoint["models_state_dict"][idx])
     return trial
+

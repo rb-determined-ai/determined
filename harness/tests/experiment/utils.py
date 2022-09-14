@@ -1,6 +1,7 @@
 import os
 import pathlib
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Type
+import random
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Type, cast
 
 import numpy as np
 import pytest
@@ -9,6 +10,7 @@ from tensorflow.keras import utils as keras_utils
 
 import determined as det
 from determined import core, gpu, keras, workload
+from determined.pytorch import PyTorchTrialController, PyTorchTrialContext, PyTorchTrial, Batch
 
 
 class TrainAndValidate:
@@ -116,6 +118,12 @@ def make_default_exp_config(
         "searcher": {
             "metric": searcher_metric,
         },
+        "min_checkpoint_period": {
+            "batches": 0
+        },
+        "min_validation_period": {
+            "batches": 0
+        }
     }
 
 
@@ -265,6 +273,65 @@ def make_trial_controller_from_trial_implementation(
         env=env,
         workloads=workloads,
     )
+
+def run_pytorch_trial_controller_from_trial_impl(
+    trial_class: Type[det.pytorch.PyTorchTrial],
+    hparams: Dict,
+    scheduling_unit: int = 1,
+    trial_seed: int = random.randint(0, 1 << 31),
+    exp_config: Optional[Dict] = None,
+    checkpoint_dir: Optional[str] = None,
+    latest_checkpoint: Optional[str] = None,
+    steps_completed: int = 0,
+    expose_gpus: bool = False,
+    max_batches: int = 100,
+    min_checkpoint_batches: int = 0,
+    min_validation_batches: int = 0,
+) -> PyTorchTrialController:
+
+    assert issubclass(trial_class, PyTorchTrial), "pytorch test method called for non-pytorch trial"
+
+    if not exp_config:
+        assert hasattr(
+            trial_class, "_searcher_metric"
+        ), "Trial classes for unit tests should be annotated with a _searcher_metric attribute"
+        searcher_metric = trial_class._searcher_metric  # type: ignore
+        exp_config = make_default_exp_config(
+            hparams, scheduling_unit, searcher_metric, checkpoint_dir=checkpoint_dir
+        )
+    env = make_default_env_context(
+        hparams=hparams,
+        experiment_config=exp_config,
+        trial_seed=trial_seed,
+        latest_checkpoint=latest_checkpoint,
+        steps_completed=steps_completed,
+        expose_gpus=expose_gpus,
+    )
+
+    storage_manager = det.common.storage.SharedFSStorageManager(checkpoint_dir or "/tmp")
+    with core._dummy_init(storage_manager=storage_manager) as core_context:
+
+        core_context.train._trial_id = env.det_trial_id
+
+        distributed_backend = det._DistributedBackend()
+
+        PyTorchTrialController.pre_execute_hook(env.trial_seed, distributed_backend)
+        trial_context = PyTorchTrialContext.from_env(env_context=env, core_context=core_context)
+
+        trial_inst = trial_class(trial_context)
+
+        trial_controller = PyTorchTrialController(
+            trial_inst=trial_inst,
+            context=trial_context,
+            max_length=Batch(max_batches),
+            min_checkpoint_period=Batch(min_checkpoint_batches),
+            min_validation_period=Batch(min_validation_batches),
+            searcher_metric_name=trial_class._searcher_metric,  # type: ignore
+            scheduling_unit=scheduling_unit,
+            local_training=True
+        )
+        trial_controller.run()
+        return trial_controller
 
 
 def reproducibility_test(
@@ -430,8 +497,13 @@ def ensure_requires_global_batch_size(
 
     # Catch missing global_batch_size.
     with pytest.raises(det.errors.InvalidExperimentException, match="is a required hyperparameter"):
-        _ = make_trial_controller_from_trial_implementation(
-            trial_class,
-            bad_hparams,
-            make_workloads(),
-        )
+        if issubclass(trial_class, PyTorchTrial):
+            _ = run_pytorch_trial_controller_from_trial_impl(
+                trial_class,
+                bad_hparams,
+            )
+        else:
+            _ = make_trial_controller_from_trial_implementation(
+                trial_class,
+                bad_hparams
+            )

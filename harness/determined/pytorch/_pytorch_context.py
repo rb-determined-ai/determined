@@ -1,7 +1,11 @@
 import contextlib
 import logging
+import pathlib
+import pickle
+import random
 from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Type, Union, cast
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -29,8 +33,27 @@ except ImportError:  # pragma: no cover
         logging.warning("PyTorch AMP is unavailable.")
     pass
 
+class TrialState:
+    def __init__(
+            self,
+            trial_id: int,
+            last_ckpt: int = 0,
+            steps_completed: int = 0,
+            step_id: int = 0,
+            last_val: int = 0,
+            batches_trained: int = None,
+            epochs_trained: int = None,
+    ) -> None:
+        # Store TrialID to distinguish between e.g. pause/restart and continue training.
+        self.trial_id = trial_id
+        self.last_ckpt = last_ckpt
+        self.steps_completed = steps_completed
+        self.step_id = step_id
+        self.last_val = last_val
+        self.batches_trained = batches_trained
+        self.epochs_trained = epochs_trained
 
-class PyTorchTrialContext(det.TrialContext, pytorch._PyTorchReducerContext):
+class PyTorchTrialContext(pytorch._PyTorchReducerContext):
     """Contains runtime information for any Determined workflow that uses the ``PyTorch`` API.
 
     With this class, users can do the following things:
@@ -47,15 +70,30 @@ class PyTorchTrialContext(det.TrialContext, pytorch._PyTorchReducerContext):
        the runtime information and properly handling training data in distributed training.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        det.TrialContext.__init__(self, *args, **kwargs)
+    def __init__(self,
+                 core_context: det.core.Context,
+                 trial_seed: int,
+                 hparams: Optional[Dict] = None,
+                 slots_per_trial: Optional[int] = 0,
+                 num_gpus: Optional[int] = 0,
+                 exp_conf: Optional[Dict] = None,
+                 aggregation_frequency: Optional[int] = 1,
+                 fp16_compression: Optional[bool] = False,
+                 average_aggregated_gradients: Optional[bool] = False,
+                 ) -> None:
+        self._core = core_context
+        self.distributed = self._core.distributed
         pytorch._PyTorchReducerContext.__init__(self, self.distributed.allgather)
         self._per_slot_batch_size, self._global_batch_size = util.calculate_batch_sizes(
-            self.get_hparams(),
-            self.env.experiment_config.slots_per_trial(),
-            "PyTorchTrial",
+            hparams=hparams,
+            slots_per_trial=slots_per_trial,
+            trialname="PyTorchTrial",
         )
+        self._hparams = hparams
+        self._num_gpus = num_gpus
+        self._exp_conf = exp_conf
 
+        self._trial_seed = trial_seed
         self._distributed_backend = det._DistributedBackend()
 
         self.device = self._init_device()
@@ -92,14 +130,28 @@ class PyTorchTrialContext(det.TrialContext, pytorch._PyTorchReducerContext):
         self._reducers = pytorch._PyTorchReducerContext()
         self._determined_profiler = None  # type: Optional[profiler.ProfilerAgent]
 
-        optimizations_config = self.env.experiment_config.get_optimizations_config()
-        self._aggregation_frequency = cast(int, optimizations_config.get("aggregation_frequency"))
-        self._fp16_compression = cast(bool, optimizations_config.get("gradient_compression"))
-        self._average_aggregated_gradients = cast(
-            bool, optimizations_config.get("average_aggregated_gradients")
-        )
-        self._average_training_metrics = cast(
-            bool, optimizations_config.get("average_training_metrics")
+        self._cluster_info = det.get_cluster_info()
+        self._managed_training = self._cluster_info and self._cluster_info.task_type == "TRIAL"
+
+        self._aggregation_frequency = aggregation_frequency
+        self._fp16_compression = fp16_compression
+        self._average_aggregated_gradients = average_aggregated_gradients
+
+        self._stop_requested = False
+
+    @staticmethod
+    def from_env(env_context: det.EnvContext, core_context: det.core.Context) -> "PyTorchTrialContext":
+        optimizations_config = env_context.experiment_config.get_optimizations_config()
+        return PyTorchTrialContext(
+            core_context=core_context,
+            hparams=env_context.hparams,
+            num_gpus=len(env_context.container_gpus),
+            exp_conf=env_context.experiment_config,
+            trial_seed=env_context.trial_seed,
+            slots_per_trial=env_context.experiment_config.slots_per_trial(),
+            aggregation_frequency=optimizations_config.get("aggregation_frequency"),
+            fp16_compression=optimizations_config.get("gradient_compression"),
+            average_aggregated_gradients=optimizations_config.get("average_aggregated_gradients")
         )
 
     def get_global_batch_size(self) -> int:
@@ -115,6 +167,50 @@ class PyTorchTrialContext(det.TrialContext, pytorch._PyTorchReducerContext):
         size divided by the number of GPUs used to train the model.
         """
         return self._per_slot_batch_size
+
+    def get_experiment_config(self) -> Dict[str, Any]:
+        return self._exp_conf
+
+    def get_hparam(self, name: str) -> Any:
+        """
+        Return the current value of the hyperparameter with the given name.
+        """
+        if name not in self.get_hparams():
+            raise ValueError(
+                "Could not find name '{}' in experiment "
+                "hyperparameters. Please check your experiment "
+                "configuration 'hyperparameters' section.".format(name)
+            )
+        if name == "global_batch_size":
+            logging.warning(
+                "Please use `context.get_per_slot_batch_size()` and "
+                "`context.get_global_batch_size()` instead of accessing "
+                "`global_batch_size` directly."
+            )
+        return self.get_hparams()[name]
+
+    def get_hparams(self) -> Dict[str, Any]:
+        return self._hparams
+
+    def get_stop_requested(self) -> bool:
+        """
+        Return whether a trial stoppage has been requested.
+        """
+        return self._stop_requested
+
+    def set_stop_requested(self, stop_requested: bool) -> None:
+        """
+        Set a flag to request a trial stoppage. When this flag is set to True,
+        we finish the step, checkpoint, then exit.
+        """
+        if not isinstance(stop_requested, bool):
+            raise AssertionError("stop_requested must be a boolean")
+
+        logging.info(
+            "A trial stoppage has requested. The trial will be stopped "
+            "at the end of the current step."
+        )
+        self._stop_requested = stop_requested
 
     def autocast_forward_pass(self, to_wrap: torch.nn.Module) -> torch.nn.Module:
         # First, ensure the forward pass is wrapped in an autocast context:
@@ -169,7 +265,7 @@ class PyTorchTrialContext(det.TrialContext, pytorch._PyTorchReducerContext):
     def wrap_model(self, model: torch.nn.Module) -> torch.nn.Module:
         """Returns a wrapped model."""
 
-        if self.env.managed_training:
+        if self._managed_training:
             if self._use_apex:
                 raise det.errors.InvalidExperimentException(
                     "Must call wrap_model() before configure_apex_amp.",
@@ -226,7 +322,7 @@ class PyTorchTrialContext(det.TrialContext, pytorch._PyTorchReducerContext):
                 return {"loss1": loss1, "loss2": loss2}
 
         """
-        if self.env.managed_training:
+        if self._managed_training:
             if self._use_apex:
                 raise det.errors.InvalidExperimentException(
                     "Must call wrap_optimizer() before configure_apex_amp.",
@@ -329,16 +425,15 @@ class PyTorchTrialContext(det.TrialContext, pytorch._PyTorchReducerContext):
         return [(name, p) for name, p in self._main_model.named_parameters() if p in opt_params]
 
     def _init_device(self) -> torch.device:
-        self.n_gpus = len(self.env.container_gpus)
         if self.distributed.size > 1:
-            if self.n_gpus > 0:
+            if self._num_gpus > 0:
                 # We launch a horovod process per GPU. Each process
                 # needs to bind to a unique GPU.
                 device = torch.device("cuda", self.distributed.local_rank)
                 torch.cuda.set_device(device)
             else:
                 device = torch.device("cpu")
-        elif self.n_gpus > 0:
+        elif self._num_gpus > 0:
             device = torch.device("cuda", 0)
         else:
             device = torch.device("cpu")
@@ -467,7 +562,7 @@ class PyTorchTrialContext(det.TrialContext, pytorch._PyTorchReducerContext):
             If  ``optimizers`` args were lists, the corresponding return value will
             also be a list.
         """
-        if not enabled or not self.env.managed_training:
+        if not enabled or not self._managed_training:
             return models, optimizers
 
         if self._scaler is not None and self._scaler.is_enabled():
@@ -545,7 +640,7 @@ class PyTorchTrialContext(det.TrialContext, pytorch._PyTorchReducerContext):
             yield
 
     def _should_communicate_and_update(self) -> bool:
-        if not self.env.managed_training:
+        if not self._managed_training:
             return True
         if self._current_batch_idx is None:
             raise det.errors.InternalException("Training hasn't started.")
@@ -799,6 +894,9 @@ class PyTorchTrialContext(det.TrialContext, pytorch._PyTorchReducerContext):
         if self._current_batch_idx is None:
             raise det.errors.InternalException("Training hasn't started.")
         return self._current_batch_idx
+
+    def get_trial_seed(self) -> int:
+        return self._trial_seed
 
     class _PyTorchDistributedDataParallel(
         torch.nn.parallel.DistributedDataParallel  # type: ignore
