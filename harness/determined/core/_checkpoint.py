@@ -203,8 +203,8 @@ class CheckpointContext:
                 # Functions can't be reliably serialized, so instead we pass each filename between
                 # all workers.  But because this traffic is local (unix sockets by default) it
                 # should be far faster than any download.
-                _ = self._dist.broadcast_local(name)
-                return any(self._dist.gather(selector(name) if selector is not None else True))
+                _ = self._dist.broadcast_local(path)
+                return any(self._dist.gather_local(selector(path) if selector is not None else True))
 
             self._storage_manager.download(src=storage_id, dst=ckpt_dir, selector=_selector)
 
@@ -217,7 +217,7 @@ class CheckpointContext:
                     # Chief is done downloading files.
                     break
                 assert want_filter, "want_filter is not set but name was not None"
-                _ = self._dist.gather(selector(name) if selector is not None else True)
+                _ = self._dist.gather_local(selector(name) if selector is not None else True)
 
     def get_metadata(self, storage_id: str) -> Dict[str, Any]:
         """
