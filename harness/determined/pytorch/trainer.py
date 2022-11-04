@@ -165,6 +165,9 @@ def init(hparams: Optional[Dict] = None,
     if local_training:
         trial_seed = generate_local_seed()
     else:
+        if hparams and cluster_info.trial.hparams:
+            logging.warning("hparams are specified in Trainer and experiment config. Trainer hparams will be ignored")
+        hparams = cluster_info.trial.hparams
         trial_seed = cluster_info.trial.trial_seed
 
     PyTorchTrialController._set_random_seeds(trial_seed)

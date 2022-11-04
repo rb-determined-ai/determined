@@ -130,42 +130,41 @@ class PyTorchTrialController:
         self.prof = det_profiler
         self.context._set_determined_profiler(self.prof)
 
-        self.local_training = local_training
+        self._local_training = local_training
 
         distributed_backend = det._DistributedBackend()
-        self.use_horovod = distributed_backend.use_horovod()
-        self.use_torch = distributed_backend.use_torch()
-        self.is_chief = self.context.distributed.rank == 0
+        self._use_horovod = distributed_backend.use_horovod()
+        self._use_torch = distributed_backend.use_torch()
+        self._is_chief = self.context.distributed.rank == 0
 
         # Training loop variables
-        self.max_length = max_length
-        self.min_checkpoint_period = min_checkpoint_period
-        self.min_validation_period = min_validation_period
-        self.scheduling_unit = scheduling_unit
+        self._max_length = max_length
+        self._min_checkpoint_period = min_checkpoint_period
+        self._min_validation_period = min_validation_period
+        self._scheduling_unit = scheduling_unit
 
         # Training loop state
         if local_training:
             self._trial_id = 0
-            assert self.max_length, "max_length must be specified for local-training mode"
+            assert self._max_length, "max_length must be specified for local-training mode"
         else:
             self._trial_id = self.core_context.train._trial_id
 
         self.state = TrialState(trial_id=self._trial_id,
                                 batches_trained=steps_completed)
-        self.searcher_op = None
+        self._searcher_op = None
         self._searcher_unit = self.core_context.searcher.get_configured_units()
-        self.training_metrics = []
-        self.val_from_previous_run = self.core_context.train._get_last_validation()
+        self._training_metrics = []
+        self._val_from_previous_run = self.core_context.train._get_last_validation()
 
         # Training configs
-        self.local_training = local_training
-        self.latest_checkpoint = latest_checkpoint
-        self.average_training_metrics = average_training_metrics
-        self.test_mode = test_mode
-        self.searcher_metric_name = searcher_metric_name
-        self.ckpt_policy = checkpoint_policy
-        self.smaller_is_better = smaller_is_better
-        self.global_batch_size = self.context.get_global_batch_size()
+        self._latest_checkpoint = latest_checkpoint
+        self._average_training_metrics = average_training_metrics
+        self._test_mode = test_mode
+        self._searcher_metric_name = searcher_metric_name
+        self._ckpt_policy = checkpoint_policy
+        self._smaller_is_better = smaller_is_better
+        self._global_batch_size = self.context.get_global_batch_size()
 
         if torch.cuda.is_available():
             self.prof._set_sync_device(self._sync_device)
@@ -193,14 +192,14 @@ class PyTorchTrialController:
         # Currently only horovod and torch backends are supported for distributed training
         if self.context.distributed.size > 1:
             assert (
-                self.use_horovod or self.use_torch
+                self._use_horovod or self._use_torch
             ), "Must use horovod or torch for distributed training"
-        if context.distributed.size > 1 and not self.is_chief:
+        if context.distributed.size > 1 and not self._is_chief:
             log_level = (
                 logging.DEBUG if debug else logging.WARNING
             )
             logging.getLogger().setLevel(log_level)
-        self.metric_writer = self.create_metric_writer()
+        self._metric_writer = self.create_metric_writer()
 
     @staticmethod
     def from_env(trial_inst: "PyTorchTrial",
@@ -250,9 +249,9 @@ class PyTorchTrialController:
 
         cls._set_random_seeds(trial_seed)
 
-    def upload_tb_files(self) -> None:
+    def _upload_tb_files(self) -> None:
         self.core_context.train.upload_tensorboard_files(
-            (lambda _: True) if self.is_chief else (lambda p: not p.match("*tfevents*")),
+            (lambda _: True) if self._is_chief else (lambda p: not p.match("*tfevents*")),
             get_rank_aware_path,
         )
 
@@ -271,17 +270,17 @@ class PyTorchTrialController:
 
     def _report_training_metrics(self):
         # It is possible we have already report training metrics for this step from checkpointing
-        if not self.training_metrics:
+        if not self._training_metrics:
             return
 
         # Aggregate and reduce training metrics from all the training processes.
-        if self.context.distributed.size > 1 and self.average_training_metrics:
+        if self.context.distributed.size > 1 and self._average_training_metrics:
             with self.prof.record_timing("average_training_metrics"):
                 batch_metrics = pytorch._combine_and_average_training_metrics(
-                    self.context.distributed, self.training_metrics
+                    self.context.distributed, self._training_metrics
                 )
         else:
-            batch_metrics = self.training_metrics
+            batch_metrics = self._training_metrics
 
         metrics = det.util.make_metrics(None, batch_metrics)
 
@@ -301,11 +300,11 @@ class PyTorchTrialController:
             )
 
         # Only report on the chief worker
-        if self.is_chief:
+        if self._is_chief:
             avg_metrics = metrics.get("avg_metrics", {})
             batch_metrics = metrics.get("batch_metrics", [])
 
-            self.metric_writer.on_train_step_end(
+            self._metric_writer.on_train_step_end(
                 self.state.batches_trained,
                 avg_metrics,
                 batch_metrics,
@@ -317,34 +316,34 @@ class PyTorchTrialController:
         self.context.reset_reducers()
 
         # Clear training metrics for next reporting step
-        self.training_metrics = []
+        self._training_metrics = []
 
     def _report_validation_metrics(self, metrics):
-        if not self.is_chief:
+        if not self._is_chief:
             return
         # Check if op complete
         searcher_metric = None
-        if self.searcher_op:
+        if self._searcher_op:
             searcher_metric = self._validate_searcher_metric(metrics)
             if self._steps_remaining() < 1:
-                self.searcher_op.report_completed(searcher_metric)
+                self._searcher_op.report_completed(searcher_metric)
 
         self.core_context.train.report_validation_metrics(self.state.batches_trained, metrics)
 
         if self.state.last_ckpt != self.state.batches_trained:
-            if self.ckpt_policy == "all" or (
-                self.ckpt_policy == "best"
+            if self._ckpt_policy == "all" or (
+                self._ckpt_policy == "best"
             ):
-                self.checkpoint(already_exiting=False)
-            elif self.ckpt_policy == "best" and searcher_metric:
+                self._checkpoint(already_exiting=False)
+            elif self._ckpt_policy == "best" and searcher_metric:
                 self.is_best_validation(now=searcher_metric, before=self.core_context.train.get_experiment_best_validation())
-                self.checkpoint(already_exiting=False)
+                self._checkpoint(already_exiting=False)
 
     def is_best_validation(self, now: float, before: Optional[float]) -> bool:
         if before is None:
             return True
 
-        return (now < before) if self.smaller_is_better else (now > before)
+        return (now < before) if self._smaller_is_better else (now > before)
 
     def on_epoch_start(self, epoch_idx: int):
         for callback in self.callbacks.values():
@@ -368,7 +367,7 @@ class PyTorchTrialController:
             ):
                 callback.on_training_epoch_end(epoch_idx)
 
-    def checkpoint(self, already_exiting: bool):
+    def _checkpoint(self, already_exiting: bool):
         if self.state.last_ckpt == self.state.batches_trained:
             return
 
@@ -377,7 +376,7 @@ class PyTorchTrialController:
 
         uuid = ""
         try:
-            if self.is_chief:
+            if self._is_chief:
                 metadata = {
                     "determined_version": det.__version__,
                     "steps_completed": self.state.batches_trained,
@@ -474,7 +473,7 @@ class PyTorchTrialController:
                         )
                     )
                 self.validation_loader = validation_data
-        elif self.is_chief:
+        elif self._is_chief:
             if isinstance(validation_data, pytorch.DataLoader):
                 self.validation_loader = validation_data.get_data_loader(
                     repeat=False, skip=0, num_replicas=1, rank=0
@@ -491,7 +490,7 @@ class PyTorchTrialController:
 
     def _step_batch(self):
         self.state.batches_trained += 1
-        self.state.epochs_trained = self.get_epoch_idx(self.state.batches_trained)
+        self.state.epochs_trained = self._get_epoch_idx(self.state.batches_trained)
         # True epoch-based training is not supported. Epoch start/end is calculated with batch.
         if self.context.is_epoch_start():
             self.on_epoch_start(self.state.epochs_trained)
@@ -502,51 +501,52 @@ class PyTorchTrialController:
         self._train_step()
 
     def _should_validate(self) -> bool:
-        if isinstance(self.min_validation_period, Batch):
-            return self.state.batches_trained % max(self.min_validation_period.value, 1) == 0
-        elif isinstance(self.min_validation_period, Epoch):
-            return self.state.epochs_trained % max(self.min_validation_period.value, 1) == 0
-        elif isinstance(self.min_validation_period, Record):
-            return (self.state.batches_trained * self.global_batch_size) % max(self.min_validation_period.value, 1) == 0
+        if isinstance(self._min_validation_period, Batch):
+            return self.state.batches_trained % max(self._min_validation_period.value, 1) == 0
+        elif isinstance(self._min_validation_period, Epoch):
+            return self.state.epochs_trained % max(self._min_validation_period.value, 1) == 0
+        elif isinstance(self._min_validation_period, Record):
+            return (self.state.batches_trained * self._global_batch_size) % max(self._min_validation_period.value, 1) == 0
         else:
             return False
 
     def _should_checkpoint(self) -> bool:
-        if isinstance(self.min_checkpoint_period, Batch):
-            return self.state.batches_trained % max(self.min_checkpoint_period.value, 1) == 0
-        elif isinstance(self.min_checkpoint_period, Epoch):
-            return self.state.epochs_trained % max(self.min_checkpoint_period.value, 1) == 0
-        elif isinstance(self.min_checkpoint_period, Record):
-            return (self.state.batches_trained * self.global_batch_size) % max(self.min_checkpoint_period.value, 1) == 0
+        if isinstance(self._min_checkpoint_period, Batch):
+            return self.state.batches_trained % max(self._min_checkpoint_period.value, 1) == 0
+        elif isinstance(self._min_checkpoint_period, Epoch):
+            return self.state.epochs_trained % max(self._min_checkpoint_period.value, 1) == 0
+        elif isinstance(self._min_checkpoint_period, Record):
+            return (self.state.batches_trained * self._global_batch_size) % max(self._min_checkpoint_period.value, 1) == 0
         else:
             return False
 
     def _train_step(self):
         should_validate = self._should_validate()
         should_checkpoint = self._should_checkpoint()
-        should_report = self.state.batches_trained % self.scheduling_unit == 0
+        should_report = self.state.batches_trained % self._scheduling_unit == 0
 
         if not any([should_validate, should_checkpoint, should_report]):
             # No validation/checkpointing for this step, continue training
             return
 
         # Train step begin: report metrics and searcher before a validation or checkpoint step
-        if self.searcher_op:
-            self._report_searcher_progress(self.searcher_op)
+        if self._searcher_op:
+            self._report_searcher_progress(self._searcher_op)
         self._report_training_metrics()
 
         if should_validate:
             val_metrics = self._validate()
             self._report_validation_metrics(val_metrics)
+            self.core_context.train.set_status("training")
 
         if should_checkpoint:
-            self.checkpoint(already_exiting=False)
+            self._checkpoint(already_exiting=False)
 
         # Train step end: check preemption and upload to tensorboard
-        self.upload_tb_files()
-        self.stop_requested()
+        self._upload_tb_files()
+        self._stop_requested()
 
-    def stop_requested(self):
+    def _stop_requested(self):
         if self.core_context.distributed.rank == 0:
             if self.core_context.preempt.should_preempt():
                 raise ShouldExit()
@@ -554,18 +554,19 @@ class PyTorchTrialController:
             raise ShouldExit()
 
     def _steps_remaining(self):
-        if isinstance(self.max_length, Batch):
-            return self.max_length.value - self.state.batches_trained
-        elif isinstance(self.max_length, Epoch):
-            return self.max_length.value - self.state.epochs_trained
-        elif isinstance(self.max_length, Record):
-            return self.max_length.value - (self.state.batches_trained * self.global_batch_size)
+        if isinstance(self._max_length, Batch):
+            return self._max_length.value - self.state.batches_trained
+        elif isinstance(self._max_length, Epoch):
+            return self._max_length.value - self.state.epochs_trained
+        elif isinstance(self._max_length, Record):
+            return self._max_length.value - (self.state.batches_trained * self._global_batch_size)
 
     def _train(self):
+        self.core_context.train.set_status("training")
         for batch_idx, batch in enumerate(self.training_iterator):
             training_metrics = self._train_batch(self.state.batches_trained, batch,
                                                  self.state.epochs_trained, batch_idx)
-            self.training_metrics.append(training_metrics)
+            self._training_metrics.append(training_metrics)
             self._step_batch()
             if self._steps_remaining() == 0:
                 return
@@ -574,7 +575,7 @@ class PyTorchTrialController:
         if op._completed:
             return
 
-        if self.is_chief:
+        if self._is_chief:
             if self._searcher_unit == core.Unit.BATCHES:
                 op.report_progress(self.state.batches_trained)
             elif self._searcher_unit == core.Unit.RECORDS:
@@ -604,7 +605,7 @@ class PyTorchTrialController:
                 with self.prof.record_timing(
                     f"callbacks.{callback.__class__.__name__}.on_trial_startup"
                 ):
-                    callback.on_trial_startup(self.state.batches_trained, self.latest_checkpoint)
+                    callback.on_trial_startup(self.state.batches_trained, self._latest_checkpoint)
                 exit_stack.enter_context(
                     defer(on_shutdown, callback.__class__.__name__, callback.on_trial_shutdown)
                 )
@@ -627,14 +628,14 @@ class PyTorchTrialController:
             exit_stack.enter_context(defer(cleanup_iterator))
 
             # If a load path is provided load weights and restore the data location.
-            if self.latest_checkpoint is not None:
-                logging.info(f"Restoring trial from checkpoint {self.latest_checkpoint}")
+            if self._latest_checkpoint is not None:
+                logging.info(f"Restoring trial from checkpoint {self._latest_checkpoint}")
                 with self.context._core.checkpoint.restore_path(
-                    self.latest_checkpoint
+                    self._latest_checkpoint
                 ) as load_path:
                     self._load(load_path)
 
-            if self.context.distributed.size > 1 and self.use_horovod:
+            if self.context.distributed.size > 1 and self._use_horovod:
                 hvd.broadcast_parameters(self.context._main_model.state_dict(), root_rank=0)
                 for optimizer in self.context.optimizers:
                     hvd.broadcast_optimizer_state(optimizer, root_rank=0)
@@ -645,19 +646,19 @@ class PyTorchTrialController:
                     f"callbacks.{callback.__class__.__name__}.on_training_start"
                 ):
                     callback.on_training_start()
-            if self.local_training:
+            if self._local_training:
                 self._train_for_local()
                 return
 
             for op in self.core_context.searcher.operations():
                 self._train_for_op(op)
-                if self.is_chief:
+                if self._is_chief:
                     assert op._completed, "logic error; op was never completed"
 
     def _train_for_local(self):
         self._train()
 
-        logging.debug(f"Training finished after {self.max_length.value} steps.")
+        logging.debug(f"Training finished after {self._max_length.value} steps.")
 
         # Report metrics after searcher complete if there are remaining unreported
         self._report_training_metrics()
@@ -669,11 +670,11 @@ class PyTorchTrialController:
 
         # Checkpoint if last checkpoint is not current
         if self.state.last_ckpt != self.state.batches_trained:
-            self.checkpoint(already_exiting=False)
+            self._checkpoint(already_exiting=False)
 
     def _train_for_op(self, op: SearcherOperation):
-        self.searcher_op = op
-        self.max_length = TrainUnit.from_searcher_unit(op.length, self._searcher_unit)
+        self._searcher_op = op
+        self._max_length = TrainUnit.from_searcher_unit(op.length, self._searcher_unit)
         self._train()
 
         logging.debug(f"Training finished after {op.length} steps.")
@@ -688,12 +689,12 @@ class PyTorchTrialController:
 
         # Checkpoint if last checkpoint is not current
         if self.state.last_ckpt != self.state.batches_trained:
-            self.checkpoint(already_exiting=False)
+            self._checkpoint(already_exiting=False)
 
     def _validate_searcher_metric(self, val_metrics):
-        if self.searcher_metric_name not in val_metrics:
+        if self._searcher_metric_name not in val_metrics:
             raise RuntimeError(
-                f"Search method is configured to use metric '{self.searcher_metric_name}' but model "
+                f"Search method is configured to use metric '{self._searcher_metric_name}' but model "
                 f"definition returned validation metrics {list(val_metrics.keys())}. The metric "
                 "used by the search method must be one of the validation "
                 "metrics returned by the model definition."
@@ -701,15 +702,15 @@ class PyTorchTrialController:
 
         # Check that the searcher metric has a scalar value so that it can be compared for
         # search purposes. Other metrics don't have to be scalars.
-        searcher_metric = val_metrics[self.searcher_metric_name]
+        searcher_metric = val_metrics[self._searcher_metric_name]
         if not tensorboard.metric_writers.util.is_numerical_scalar(searcher_metric):
             raise RuntimeError(
-                f"Searcher validation metric '{self.searcher_metric_name}' returned "
+                f"Searcher validation metric '{self._searcher_metric_name}' returned "
                 f"a non-scalar value: {searcher_metric}"
             )
         return searcher_metric
 
-    def get_epoch_idx(self, batch_id: int) -> int:
+    def _get_epoch_idx(self, batch_id: int) -> int:
         return batch_id // self.context._epoch_len  # type: ignore
 
     def _auto_step_lr_scheduler_per_batch(
@@ -732,9 +733,9 @@ class PyTorchTrialController:
                 lr_scheduler.step()
         elif lr_scheduler._step_mode == pytorch.LRScheduler.StepMode.STEP_EVERY_EPOCH:
             # We will step if the next optimizer step will land in the next epoch.
-            epoch_idx = self.get_epoch_idx(batch_idx)
+            epoch_idx = self._get_epoch_idx(batch_idx)
             next_steppable_batch = batch_idx + self.context._aggregation_frequency
-            next_batch_epoch_idx = self.get_epoch_idx(next_steppable_batch)
+            next_batch_epoch_idx = self._get_epoch_idx(next_steppable_batch)
             for e in range(epoch_idx, next_batch_epoch_idx):
                 if (e + 1) % lr_scheduler._frequency == 0:
                     lr_scheduler.step()
@@ -816,7 +817,7 @@ class PyTorchTrialController:
             return
 
         # Report a validation step is starting.
-        if self.is_chief:
+        if self._is_chief:
             self.core_context.train.set_status("validating")
 
         self.context.reset_reducers()
@@ -879,7 +880,7 @@ class PyTorchTrialController:
                     )
                 # TODO: For performance perform -> cpu() only at the end of validation.
                 batch_metrics.append(pytorch._convert_metrics_to_numpy(vld_metrics))
-                if self.test_mode:
+                if self._test_mode:
                     break
 
             for callback in self.callbacks.values():
@@ -904,7 +905,7 @@ class PyTorchTrialController:
         else:
             assert self._evaluate_full_dataset_defined(), "evaluate_full_dataset not defined."
             self.validation_loader = cast(torch.utils.data.DataLoader, self.validation_loader)
-            if self.is_chief:
+            if self._is_chief:
                 metrics = self.trial.evaluate_full_dataset(data_loader=self.validation_loader)
 
                 if not isinstance(metrics, dict):
@@ -942,7 +943,7 @@ class PyTorchTrialController:
 
         self.state.last_val = self.state.batches_trained
 
-        if self.is_chief:
+        if self._is_chief:
             # Skip reporting timings if evaluate_full_dataset() was defined.  This is far less common
             # than evaluate_batch() and we can't know how the user processed their validation data.
             if self._evaluate_batch_defined():
@@ -950,7 +951,7 @@ class PyTorchTrialController:
                 logging.info(
                     det.util.make_timing_log("validated", step_duration, num_inputs, num_batches)
                 )
-            self.metric_writer.on_validation_step_end(self.state.batches_trained, metrics)
+            self._metric_writer.on_validation_step_end(self.state.batches_trained, metrics)
 
 
         # Set models back to train mode
@@ -958,7 +959,7 @@ class PyTorchTrialController:
             model.train()
         self.core_context.train.set_status("training")
         
-        if self.is_chief:
+        if self._is_chief:
             return metrics
         else:
             return {}
@@ -1110,15 +1111,15 @@ class PyTorchTrialController:
         save_path = load_path.joinpath("trial_state.pkl")
         if save_path.exists():
             with save_path.open("rb") as f:
-                self.load_state(pickle.load(f))
+                self._load_state(pickle.load(f))
         else:
             # Support legacy save states
             wlsq_path = load_path.joinpath("workload_sequencer.pkl")
             if wlsq_path.exists():
                 with wlsq_path.open("rb") as f:
-                    self.load_state(pickle.load(f))
+                    self._load_state(pickle.load(f))
 
-    def load_state(self, state: Any) -> None:
+    def _load_state(self, state: Any) -> None:
         # Load our state from the checkpoint if we are continuing training after a pause or restart.
         # If the trial_id doesn't match our current trial id, we're continuing training a previous
         # trial and the state in the checkpoint should be discarded.
@@ -1132,13 +1133,13 @@ class PyTorchTrialController:
         # checkpoint state.  If the validation was before the last checkpoint, the checkpoint state
         # is already correct, while any validations after the last checkpoint aren't valid anymore
         # and can be safely ignored.
-        if self.state.batches_trained == self.val_from_previous_run:
+        if self.state.batches_trained == self._val_from_previous_run:
             self.state.last_val = self.state.batches_trained
 
     def _save(self, path: pathlib.Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
 
-        util.write_user_code(path, not self.local_training)
+        util.write_user_code(path, not self._local_training)
 
         rng_state = {
             "cpu_rng_state": torch.random.get_rng_state(),
