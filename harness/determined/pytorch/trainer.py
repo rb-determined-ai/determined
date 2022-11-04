@@ -149,7 +149,7 @@ def initialize_distributed_backend():
         print(f"Backend {distributed_backend} not supported")
 
 
-def generate_local_seed():
+def _generate_local_seed():
     return random.randint(0, 1 << 31)
 
 
@@ -163,7 +163,7 @@ def init(hparams: Optional[Dict] = None,
     # Pre-execute steps: initialize distributed backend and set trial seeds
     distributed_context = distributed_context or initialize_distributed_backend()
     if local_training:
-        trial_seed = generate_local_seed()
+        trial_seed = _generate_local_seed()
     else:
         if hparams and cluster_info.trial.hparams:
             logging.warning("hparams are specified in Trainer and experiment config. Trainer hparams will be ignored")
@@ -194,7 +194,8 @@ def init(hparams: Optional[Dict] = None,
                                           slots_per_trial=cast(int, exp_conf["resources"]["slots_per_trial"]),
                                           aggregation_frequency=cast(bool, exp_conf["optimizations"]["aggregation_frequency"]),
                                           fp16_compression=cast(bool, exp_conf["optimizations"]["gradient_compression"]),
-                                          average_aggregated_gradients=cast(bool, exp_conf["optimizations"]["average_aggregated_gradients"])
+                                          average_aggregated_gradients=cast(bool, exp_conf["optimizations"]["average_aggregated_gradients"]),
+                                          steps_completed=cluster_info.trial._steps_completed
                                           )
         yield context
 

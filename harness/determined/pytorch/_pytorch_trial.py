@@ -168,8 +168,8 @@ class PyTorchTrialController:
 
         if torch.cuda.is_available():
             self.prof._set_sync_device(self._sync_device)
-        self.callbacks = self.trial.build_callbacks()
-        for callback in self.callbacks.values():
+        self._callbacks = self.trial.build_callbacks()
+        for callback in self._callbacks.values():
             if util.is_overridden(callback.on_checkpoint_end, pytorch.PyTorchCallback):
                 warnings.warn(
                     "The on_checkpoint_end callback is deprecated, please use "
@@ -199,31 +199,11 @@ class PyTorchTrialController:
                 logging.DEBUG if debug else logging.WARNING
             )
             logging.getLogger().setLevel(log_level)
-        self._metric_writer = self.create_metric_writer()
+        self._metric_writer = self._create_metric_writer()
 
-    @staticmethod
-    def from_env(trial_inst: "PyTorchTrial",
-                 context: PyTorchTrialContext,
-                 env: det.EnvContext,
-                 ):
-        return PyTorchTrialController(
-            trial_inst=trial_inst,
-            context=context,
-            min_checkpoint_period=TrainUnit.from_values(**env.experiment_config.get_min_checkpoint_period()),
-            min_validation_period=TrainUnit.from_values(**env.experiment_config.get_min_validation_period()),
-            average_training_metrics=env.experiment_config.average_training_metrics_enabled(),
-            checkpoint_policy=env.experiment_config.get_checkpoint_policy(),
-            smaller_is_better=env.experiment_config.get_smaller_is_better(),
-            searcher_metric_name=env.experiment_config.get_searcher_metric(),
-            local_training=False,
-            det_profiler=ProfilerAgent.from_env(env=env, global_rank=context.distributed.rank,
-                                                local_rank=context.distributed.local_rank),
-            steps_completed=env.steps_completed,
-            debug=env.debug
-        )
 
     @classmethod
-    def create_metric_writer(
+    def _create_metric_writer(
         cls: Type["PyTorchTrialController"],
     ) -> tensorboard.BatchMetricWriter:
         from determined.tensorboard.metric_writers.pytorch import TorchWriter
@@ -293,7 +273,7 @@ class PyTorchTrialController:
 
         metrics = self.context.distributed.broadcast(metrics)
 
-        for callback in self.callbacks.values():
+        for callback in self._callbacks.values():
             callback.on_training_workload_end(
                 avg_metrics=metrics["avg_metrics"],
                 batch_metrics=metrics["batch_metrics"],
@@ -336,17 +316,17 @@ class PyTorchTrialController:
             ):
                 self._checkpoint(already_exiting=False)
             elif self._ckpt_policy == "best" and searcher_metric:
-                self.is_best_validation(now=searcher_metric, before=self.core_context.train.get_experiment_best_validation())
+                self._is_best_validation(now=searcher_metric, before=self.core_context.train.get_experiment_best_validation())
                 self._checkpoint(already_exiting=False)
 
-    def is_best_validation(self, now: float, before: Optional[float]) -> bool:
+    def _is_best_validation(self, now: float, before: Optional[float]) -> bool:
         if before is None:
             return True
 
         return (now < before) if self._smaller_is_better else (now > before)
 
-    def on_epoch_start(self, epoch_idx: int):
-        for callback in self.callbacks.values():
+    def _on_epoch_start(self, epoch_idx: int):
+        for callback in self._callbacks.values():
             with self.prof.record_timing(
                 f"callbacks.{callback.__class__.__name__}.on_training_epoch_start"
             ):
@@ -360,8 +340,8 @@ class PyTorchTrialController:
                     )
                     callback.on_training_epoch_start()  # type: ignore[call-arg]
 
-    def on_epoch_end(self, epoch_idx: int):
-        for callback in self.callbacks.values():
+    def _on_epoch_end(self, epoch_idx: int):
+        for callback in self._callbacks.values():
             with self.prof.record_timing(
                 f"callbacks.{callback.__class__.__name__}.on_training_epoch_end"
             ):
@@ -390,22 +370,12 @@ class PyTorchTrialController:
                     self._save(path)
                     uuid = storage_id
             uuid = self.context.distributed.broadcast(uuid)
-            for callback in self.callbacks.values():
+            for callback in self._callbacks.values():
                 callback.on_checkpoint_upload_end(uuid=uuid)
         except det.InvalidHP:
             self.core_context.train.report_early_exit(core.EarlyExitReason.INVALID_HP)
             if not already_exiting:
                 raise ShouldExit(skip_exit_checkpoint=True)
-
-    @classmethod
-    def from_trial(
-        cls: Type["PyTorchTrialController"], *args: Any, **kwargs: Any
-    ) -> det.TrialController:
-        return cls(*args, **kwargs)
-
-    @classmethod
-    def supports_mixed_precision(cls: Type["PyTorchTrialController"]) -> bool:
-        return True
 
     def _check_evaluate_implementation(self) -> None:
         """
@@ -493,10 +463,10 @@ class PyTorchTrialController:
         self.state.epochs_trained = self._get_epoch_idx(self.state.batches_trained)
         # True epoch-based training is not supported. Epoch start/end is calculated with batch.
         if self.context.is_epoch_start():
-            self.on_epoch_start(self.state.epochs_trained)
+            self._on_epoch_start(self.state.epochs_trained)
 
         if self.context.is_epoch_end():
-            self.on_epoch_end(self.state.epochs_trained)
+            self._on_epoch_end(self.state.epochs_trained)
 
         self._train_step()
 
@@ -601,7 +571,7 @@ class PyTorchTrialController:
                 on_trial_shutdown()
 
         with contextlib.ExitStack() as exit_stack:
-            for callback in self.callbacks.values():
+            for callback in self._callbacks.values():
                 with self.prof.record_timing(
                     f"callbacks.{callback.__class__.__name__}.on_trial_startup"
                 ):
@@ -641,7 +611,7 @@ class PyTorchTrialController:
                     hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
             exit_stack.enter_context(self.prof)
-            for callback in self.callbacks.values():
+            for callback in self._callbacks.values():
                 with self.prof.record_timing(
                     f"callbacks.{callback.__class__.__name__}.on_training_start"
                 ):
@@ -829,7 +799,7 @@ class PyTorchTrialController:
 
         step_start_time = time.time()
 
-        for callback in self.callbacks.values():
+        for callback in self._callbacks.values():
             if util.is_overridden(callback.on_validation_step_start, pytorch.PyTorchCallback):
                 logging.warning(
                     "on_validation_step_start is now deprecated, "
@@ -837,7 +807,7 @@ class PyTorchTrialController:
                 )
                 callback.on_validation_step_start()
 
-        for callback in self.callbacks.values():
+        for callback in self._callbacks.values():
             callback.on_validation_start()
 
         num_inputs = 0
@@ -850,7 +820,7 @@ class PyTorchTrialController:
             assert isinstance(self.validation_loader, torch.utils.data.DataLoader)
             if len(self.validation_loader) == 0:
                 raise RuntimeError("validation_loader is empty.")
-            for callback in self.callbacks.values():
+            for callback in self._callbacks.values():
                 callback.on_validation_epoch_start()
             for idx, batch in enumerate(self.validation_loader):
                 if self.context.experimental._auto_to_device:
@@ -883,7 +853,7 @@ class PyTorchTrialController:
                 if self._test_mode:
                     break
 
-            for callback in self.callbacks.values():
+            for callback in self._callbacks.values():
                 callback.on_validation_epoch_end(batch_metrics)
 
             metrics = pytorch._reduce_metrics(
@@ -923,7 +893,7 @@ class PyTorchTrialController:
         if self.context.distributed.size > 1 and any(
             util.is_overridden(c.on_validation_end, pytorch.PyTorchCallback)
             or util.is_overridden(c.on_validation_step_end, pytorch.PyTorchCallback)
-            for c in self.callbacks.values()
+            for c in self._callbacks.values()
         ):
             logging.debug(
                 "Broadcasting metrics to all worker processes to execute a "
@@ -931,14 +901,14 @@ class PyTorchTrialController:
             )
             metrics = self.context.distributed.broadcast(metrics)
 
-        for callback in self.callbacks.values():
+        for callback in self._callbacks.values():
             if util.is_overridden(callback.on_validation_step_end, pytorch.PyTorchCallback):
                 logging.warning(
                     "on_validation_step_end is now deprecated, please use on_validation_end instead"
                 )
                 callback.on_validation_step_end(metrics)
 
-        for callback in self.callbacks.values():
+        for callback in self._callbacks.values():
             callback.on_validation_end(metrics)
 
         self.state.last_val = self.state.batches_trained
@@ -983,7 +953,7 @@ class PyTorchTrialController:
         if checkpoint is None or not isinstance(checkpoint, dict):
             return
 
-        for callback in self.callbacks.values():
+        for callback in self._callbacks.values():
             callback.on_checkpoint_load_start(checkpoint)
 
         if "model_state_dict" in checkpoint:
@@ -1098,10 +1068,10 @@ class PyTorchTrialController:
             logging.warning("The checkpoint has no random state to restore.")
 
         callback_state = checkpoint.get("callbacks", {})
-        for name in self.callbacks:
+        for name in self._callbacks:
             if name in callback_state:
-                self.callbacks[name].load_state_dict(callback_state[name])
-            elif util.is_overridden(self.callbacks[name].load_state_dict, pytorch.PyTorchCallback):
+                self._callbacks[name].load_state_dict(callback_state[name])
+            elif util.is_overridden(self._callbacks[name].load_state_dict, pytorch.PyTorchCallback):
                 logging.warning(
                     f"Callback '{name}' implements load_state_dict(), but no callback state "
                     "was found for that name when restoring from checkpoint. This "
@@ -1165,7 +1135,7 @@ class PyTorchTrialController:
             "lr_schedulers_state_dict": [
                 lr_scheduler.state_dict() for lr_scheduler in self.context.lr_schedulers
             ],
-            "callbacks": {name: callback.state_dict() for name, callback in self.callbacks.items()},
+            "callbacks": {name: callback.state_dict() for name, callback in self._callbacks.items()},
             "rng_state": rng_state,
         }
 
@@ -1175,7 +1145,7 @@ class PyTorchTrialController:
         if self.context._use_apex:
             checkpoint["amp_state"] = apex.amp.state_dict()
 
-        for callback in self.callbacks.values():
+        for callback in self._callbacks.values():
             callback.on_checkpoint_save_start(checkpoint)
 
         torch.save(checkpoint, str(path.joinpath("state_dict.pth")))
@@ -1195,7 +1165,7 @@ class PyTorchTrialController:
                 f2,
             )
 
-        for callback in self.callbacks.values():
+        for callback in self._callbacks.values():
             # TODO(DET-7912): remove on_checkpoint_end once it has been deprecated long enough.
             callback.on_checkpoint_end(str(path))
             callback.on_checkpoint_write_end(str(path))

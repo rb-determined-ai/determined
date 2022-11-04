@@ -14,7 +14,6 @@ from determined._execution import (
     _make_local_execution_env,
     _local_execution_manager,
     _load_trial_for_checkpoint_export,
-    _load_pytorch_trial_for_checkpoint_export,
     InvalidHP,
 )
 from determined import errors

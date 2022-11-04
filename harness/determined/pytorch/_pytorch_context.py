@@ -80,6 +80,7 @@ class PyTorchTrialContext(pytorch._PyTorchReducerContext):
                  aggregation_frequency: Optional[int] = 1,
                  fp16_compression: Optional[bool] = False,
                  average_aggregated_gradients: Optional[bool] = False,
+                 steps_completed: Optional[int] = 0,
                  ) -> None:
         self._core = core_context
         self.distributed = self._core.distributed
@@ -95,7 +96,7 @@ class PyTorchTrialContext(pytorch._PyTorchReducerContext):
 
         self._trial_seed = trial_seed
         self._distributed_backend = det._DistributedBackend()
-
+        self._steps_completed = steps_completed
         self.device = self._init_device()
 
         # Track which types we have issued warnings for in to_device().
@@ -138,21 +139,6 @@ class PyTorchTrialContext(pytorch._PyTorchReducerContext):
         self._average_aggregated_gradients = average_aggregated_gradients
 
         self._stop_requested = False
-
-    @staticmethod
-    def from_env(env_context: det.EnvContext, core_context: det.core.Context) -> "PyTorchTrialContext":
-        optimizations_config = env_context.experiment_config.get_optimizations_config()
-        return PyTorchTrialContext(
-            core_context=core_context,
-            hparams=env_context.hparams,
-            num_gpus=len(env_context.container_gpus),
-            exp_conf=env_context.experiment_config,
-            trial_seed=env_context.trial_seed,
-            slots_per_trial=env_context.experiment_config.slots_per_trial(),
-            aggregation_frequency=optimizations_config.get("aggregation_frequency"),
-            fp16_compression=optimizations_config.get("gradient_compression"),
-            average_aggregated_gradients=optimizations_config.get("average_aggregated_gradients")
-        )
 
     def get_global_batch_size(self) -> int:
         """
@@ -897,6 +883,15 @@ class PyTorchTrialContext(pytorch._PyTorchReducerContext):
 
     def get_trial_seed(self) -> int:
         return self._trial_seed
+
+    def get_initial_batch(self) -> int:
+        return self._steps_completed
+
+    def get_tensorboard_path(self) -> pathlib.Path:
+        """
+        Get the path where files for consumption by TensorBoard should be written
+        """
+        return self._core.train.get_tensorboard_path()
 
     class _PyTorchDistributedDataParallel(
         torch.nn.parallel.DistributedDataParallel  # type: ignore

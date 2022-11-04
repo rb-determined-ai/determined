@@ -1,12 +1,12 @@
 import json
 import logging
 import pathlib
-from typing import Any, cast
+from typing import Any, cast, Dict, Tuple, Type
 
 import torch
 
 import determined as det
-from determined import errors, pytorch, util
+from determined import errors, pytorch, util, load
 
 
 def load_trial_from_checkpoint_path(path: str, **kwargs: Any) -> pytorch.PyTorchTrial:
@@ -73,7 +73,7 @@ def load_trial_from_checkpoint_path(path: str, **kwargs: Any) -> pytorch.PyTorch
             "metadata file for loading a legacy checkpoint."
         )
 
-    trial_cls, trial_context = det._load_pytorch_trial_for_checkpoint_export(
+    trial_cls, trial_context = _load_pytorch_trial_for_checkpoint_export(
         ckpt_dir.joinpath("code"),
         managed_training=False,
         trial_cls_spec=trial_cls_spec,
@@ -113,3 +113,34 @@ def load_trial_from_checkpoint_path(path: str, **kwargs: Any) -> pytorch.PyTorch
         model.load_state_dict(checkpoint["models_state_dict"][idx])
     return trial
 
+
+def _load_pytorch_trial_for_checkpoint_export(
+    context_dir: pathlib.Path,
+    managed_training: bool,
+    trial_cls_spec: str,
+    config: Dict[str, Any],
+    hparams: Dict[str, Any],
+) -> Tuple[pytorch.PyTorchTrial, pytorch.PyTorchTrialContext]:
+    with det._local_execution_manager(context_dir):
+        trial_class = cast(pytorch.PyTorchTrial, load.trial_class_from_entrypoint(trial_cls_spec))
+        core_context, env = det._make_local_execution_env(
+            managed_training=managed_training,
+            test_mode=False,
+            config=config,
+            checkpoint_dir="/tmp",
+            hparams=hparams,
+        )
+        trial_context = pytorch.PyTorchTrialContext(
+            core_context=core_context,
+            trial_seed=env.trial_seed,
+            hparams=hparams,
+            slots_per_trial=env.experiment_config.slots_per_trial(),
+            num_gpus=len(env.container_gpus),
+            exp_conf=env.experiment_config,
+            aggregation_frequency=env.experiment_config.get_optimizations_config().get("aggregation_frequency"),
+            fp16_compression=env.experiment_config.get_optimizations_config().get("gradient_compression"),
+            average_aggregated_gradients=env.experiment_config.average_training_metrics_enabled(),
+            steps_completed=env.steps_completed
+        )
+
+    return trial_class, trial_context

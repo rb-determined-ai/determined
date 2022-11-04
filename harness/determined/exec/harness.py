@@ -8,6 +8,7 @@ from typing import Iterator, Optional, Dict
 import determined as det
 from determined import core, horovod, load, pytorch
 from determined.common.api import analytics, certs
+from determined.profiler import ProfilerAgent
 from determined.pytorch import PyTorchTrial, PyTorchTrialController, PyTorchTrialContext
 from determined.pytorch._pytorch_trial import TrainUnit
 
@@ -32,8 +33,6 @@ def main(train_entrypoint: str) -> int:
     certs.cli_cert = certs.default_load(info.master_url)
 
     trial_class = load.trial_class_from_entrypoint(train_entrypoint)
-    if issubclass(trial_class, PyTorchTrial):
-        create_pytorch_trial_controller_and_context(info)
 
     # TODO: Don't include EnvContext object in the future high-level APIs for PyTorch or Keras.
     # It was natural to create this big-blob-of-config object, but it was a mistake to pass it into
@@ -78,7 +77,6 @@ def main(train_entrypoint: str) -> int:
         # We can't build a core.Context without rank information, and we can't gather rank
         # information until the distributed backend is initialized, and we can't initialize the
         # correct distributed backend until we know which Trial class the user implemented.
-        trial_class = load.trial_class_from_entrypoint(train_entrypoint)
         controller_class = load.get_trial_controller_class(trial_class)
         if info.container_rank == 0:
             try:
@@ -114,7 +112,18 @@ def main(train_entrypoint: str) -> int:
             tensorboard_mode=core.TensorboardMode.MANUAL,
         ) as core_context:
             if isinstance(trial_class, PyTorchTrial):
-                trial_context = PyTorchTrialContext.from_env(env_context=env, core_context=core_context)
+                trial_context = PyTorchTrialContext(
+                    core_context=core_context,
+                    trial_seed=env.trial_seed,
+                    hparams=env.hparams,
+                    slots_per_trial=env.experiment_config.slots_per_trial(),
+                    num_gpus=len(env.container_gpus),
+                    exp_conf=env.experiment_config,
+                    aggregation_frequency=env.experiment_config.get_optimizations_config().get("aggregation_frequency"),
+                    fp16_compression=env.experiment_config.get_optimizations_config().get("gradient_compression"),
+                    average_aggregated_gradients=env.experiment_config.get_optimizations_config().get("average_aggregated_gradients"),
+                    steps_completed=env.steps_completed,
+                )
             else:
                 trial_context = trial_class.trial_context_class(core_context, env)
 
@@ -125,9 +134,21 @@ def main(train_entrypoint: str) -> int:
             logging.info(f"Creating {controller_class.__name__} with {trial_class.__name__}.")
 
             if isinstance(trial_class, PyTorchTrial):
-                controller = PyTorchTrialController.from_env(trial_inst=trial_inst,
-                                                             context=trial_context,
-                                                             env=env)
+                controller = PyTorchTrialController(
+                    trial_inst=trial_inst,
+                    context=trial_context,
+                    min_checkpoint_period=TrainUnit.from_values(**env.experiment_config.get_min_checkpoint_period()),
+                    min_validation_period=TrainUnit.from_values(**env.experiment_config.get_min_validation_period()),
+                    average_training_metrics=env.experiment_config.average_training_metrics_enabled(),
+                    checkpoint_policy=env.experiment_config.get_checkpoint_policy(),
+                    smaller_is_better=env.experiment_config.get_smaller_is_better(),
+                    searcher_metric_name=env.experiment_config.get_searcher_metric(),
+                    local_training=False,
+                    det_profiler=ProfilerAgent.from_env(env=env, global_rank=trial_context.distributed.rank,
+                                                        local_rank=trial_context.distributed.local_rank),
+                    steps_completed=env.steps_completed,
+                    debug=env.debug
+                )
             else:
                 controller = controller_class.from_trial(
                     trial_inst=trial_inst,
@@ -139,52 +160,97 @@ def main(train_entrypoint: str) -> int:
 
     return 0
 
+def _run_pytorch_trial():
+    det.common.set_logger(env.debug)
+    logging.debug("Starting harness.")
 
-def create_pytorch_trial_controller_and_context(min_checkpoint_period: int,
-                                                min_validation_period: int,
-                                                searcher_metric_name: str,
-                                                average_training_metrics: bool,
-                                                checkpoint_policy: str,
-                                                smaller_is_better: bool,
-                                                steps_completed: Optional[int] = None,
-                                                latest_checkpoint: Optional[str] = None,
-                                                test_mode: Optional[bool] = False,
-                                                hparams: Optional[Dict] = None,
-                                                slots_per_trial: Optional[int] = 0,
-                                                num_gpus: Optional[int] = 0,
-                                                core_context: det.core.Context = None,
-                                                exp_conf: Optional[Dict] = None,
-                                                aggregation_frequency: Optional[int] = 1,
-                                                fp16_compression: Optional[bool] = False,
-                                                average_aggregated_gradients: Optional[bool] = False
-                                                ):
+    with maybe_periodic_stacktraces(env.debug):
+        # Step 1: Load user code.
+        # We can't build a core.Context without rank information, and we can't gather rank
+        # information until the distributed backend is initialized, and we can't initialize the
+        # correct distributed backend until we know which Trial class the user implemented.
+        controller_class = load.get_trial_controller_class(trial_class)
+        if info.container_rank == 0:
+            try:
+                analytics.send_analytics("trial_loaded", analytics.get_trial_analytics(trial_class))
+            except Exception as e:
+                logging.debug(f"Cannot send analytics: {e}")
 
-    trial_context = PyTorchTrialContext(hparams=hparams,
-                                        core_context=core_context,
-                                        slots_per_trial=slots_per_trial,
-                                        num_gpus=num_gpus,
-                                        exp_conf=exp_conf,
-                                        aggregation_frequency=aggregation_frequency,
-                                        fp16_compression=fp16_compression,
-                                        average_aggregated_gradients=average_aggregated_gradients)
-    trial_inst = PyTorchTrial(trial_context)
-    controller = PyTorchTrialController(
-        trial_inst=trial_inst,
-        context=trial_context,
-        min_checkpoint_period=min_checkpoint_period,
-        min_validation_period=min_validation_period,
-        searcher_metric_name=searcher_metric_name,
-        average_training_metrics=average_training_metrics,
-        checkpoint_policy=checkpoint_policy,
-        smaller_is_better=smaller_is_better,
-        steps_completed=steps_completed,
-        latest_checkpoint=latest_checkpoint,
-        local_training=False,
-        test_mode=test_mode,
-    )
+        # Step 2: Initialize framework-specific details (dtrain framework, random seeds, etc).
+        distributed_backend = det._DistributedBackend()
+        controller_class.pre_execute_hook(env, distributed_backend)
 
-    return controller, trial_context
+        # Step 3: Now that the dtrain framework is initialized, build the DistributedContext object.
+        # For harness.py, we only support a fixed set of Determined-provided launch layers, since
+        # the TrialControllers only support a fixed set of launch layers.
+        distributed = None
+        if distributed_backend.use_horovod():
+            distributed = core.DistributedContext.from_horovod(horovod.hvd)
+        elif distributed_backend.use_deepspeed():
+            distributed = core.DistributedContext.from_deepspeed()
+        elif distributed_backend.use_torch():
+            distributed = core.DistributedContext.from_torch_distributed()
+        elif len(info.container_addrs) > 1 or len(info.slot_ids) > 1:
+            raise ValueError(
+                "In multi-slot tasks, the determined.exec.harness module must not be invoked "
+                "directly.  Instead, it must be wrapped in one of the following launch layers: "
+                "determined.launch.horovod, determined.launch.deepspeed"
+            )
 
+        # Step 4: Let core.init() create the core.Context.
+        with core.init(
+            distributed=distributed,
+            preempt_mode=core.PreemptMode.ChiefOnly,
+            tensorboard_mode=core.TensorboardMode.MANUAL,
+        ) as core_context:
+            if isinstance(trial_class, PyTorchTrial):
+                trial_context = PyTorchTrialContext(
+                    core_context=core_context,
+                    trial_seed=env.trial_seed,
+                    hparams=env.hparams,
+                    slots_per_trial=env.experiment_config.slots_per_trial(),
+                    num_gpus=len(env.container_gpus),
+                    exp_conf=env.experiment_config,
+                    aggregation_frequency=env.experiment_config.get_optimizations_config().get("aggregation_frequency"),
+                    fp16_compression=env.experiment_config.get_optimizations_config().get("gradient_compression"),
+                    average_aggregated_gradients=env.experiment_config.get_optimizations_config().get("average_aggregated_gradients"),
+                    steps_completed=env.steps_completed,
+                )
+            else:
+                trial_context = trial_class.trial_context_class(core_context, env)
+
+            # Step 4: Instantiate the user's Trial.
+            trial_inst = trial_class(trial_context)
+
+            # Step 5: Create a TrialController and execute training
+            logging.info(f"Creating {controller_class.__name__} with {trial_class.__name__}.")
+
+            if isinstance(trial_class, PyTorchTrial):
+                controller = PyTorchTrialController(
+                    trial_inst=trial_inst,
+                    context=trial_context,
+                    min_checkpoint_period=TrainUnit.from_values(**env.experiment_config.get_min_checkpoint_period()),
+                    min_validation_period=TrainUnit.from_values(**env.experiment_config.get_min_validation_period()),
+                    average_training_metrics=env.experiment_config.average_training_metrics_enabled(),
+                    checkpoint_policy=env.experiment_config.get_checkpoint_policy(),
+                    smaller_is_better=env.experiment_config.get_smaller_is_better(),
+                    searcher_metric_name=env.experiment_config.get_searcher_metric(),
+                    local_training=False,
+                    det_profiler=ProfilerAgent.from_env(env=env, global_rank=trial_context.distributed.rank,
+                                                        local_rank=trial_context.distributed.local_rank),
+                    steps_completed=env.steps_completed,
+                    debug=env.debug
+                )
+            else:
+                controller = controller_class.from_trial(
+                    trial_inst=trial_inst,
+                    context=trial_context,
+                    env=env,
+                )
+
+            controller.run()
+
+    return 0
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
