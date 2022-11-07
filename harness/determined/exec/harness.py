@@ -3,7 +3,7 @@ import contextlib
 import faulthandler
 import logging
 import sys
-from typing import Iterator, Optional, Dict
+from typing import Iterator, Optional, Dict, Type, cast
 
 import determined as det
 from determined import core, horovod, load, pytorch
@@ -43,6 +43,9 @@ def main(train_entrypoint: str) -> int:
     # will use that pattern for the future high-level APIs, but it's not worth refactoring e.g. the
     # TFKerasTrialController or EstimatorTrialController to add that functionality, so for now we
     # continue with the legacy strategy.
+
+    if isinstance(trial_class, PyTorchTrial):
+        return _run_pytorch_trial(trial_class, info)
 
     env = det.EnvContext(
         master_url=info.master_url,
@@ -111,21 +114,7 @@ def main(train_entrypoint: str) -> int:
             preempt_mode=core.PreemptMode.ChiefOnly,
             tensorboard_mode=core.TensorboardMode.MANUAL,
         ) as core_context:
-            if isinstance(trial_class, PyTorchTrial):
-                trial_context = PyTorchTrialContext(
-                    core_context=core_context,
-                    trial_seed=env.trial_seed,
-                    hparams=env.hparams,
-                    slots_per_trial=env.experiment_config.slots_per_trial(),
-                    num_gpus=len(env.container_gpus),
-                    exp_conf=env.experiment_config,
-                    aggregation_frequency=env.experiment_config.get_optimizations_config().get("aggregation_frequency"),
-                    fp16_compression=env.experiment_config.get_optimizations_config().get("gradient_compression"),
-                    average_aggregated_gradients=env.experiment_config.get_optimizations_config().get("average_aggregated_gradients"),
-                    steps_completed=env.steps_completed,
-                )
-            else:
-                trial_context = trial_class.trial_context_class(core_context, env)
+            trial_context = trial_class.trial_context_class(core_context, env)
 
             # Step 4: Instantiate the user's Trial.
             trial_inst = trial_class(trial_context)
@@ -133,43 +122,29 @@ def main(train_entrypoint: str) -> int:
             # Step 5: Create a TrialController and execute training
             logging.info(f"Creating {controller_class.__name__} with {trial_class.__name__}.")
 
-            if isinstance(trial_class, PyTorchTrial):
-                controller = PyTorchTrialController(
-                    trial_inst=trial_inst,
-                    context=trial_context,
-                    min_checkpoint_period=TrainUnit.from_values(**env.experiment_config.get_min_checkpoint_period()),
-                    min_validation_period=TrainUnit.from_values(**env.experiment_config.get_min_validation_period()),
-                    average_training_metrics=env.experiment_config.average_training_metrics_enabled(),
-                    checkpoint_policy=env.experiment_config.get_checkpoint_policy(),
-                    smaller_is_better=env.experiment_config.get_smaller_is_better(),
-                    searcher_metric_name=env.experiment_config.get_searcher_metric(),
-                    local_training=False,
-                    det_profiler=ProfilerAgent.from_env(env=env, global_rank=trial_context.distributed.rank,
-                                                        local_rank=trial_context.distributed.local_rank),
-                    steps_completed=env.steps_completed,
-                    debug=env.debug
-                )
-            else:
-                controller = controller_class.from_trial(
-                    trial_inst=trial_inst,
-                    context=trial_context,
-                    env=env,
-                )
+            controller = controller_class.from_trial(
+                trial_inst=trial_inst,
+                context=trial_context,
+                env=env,
+            )
 
             controller.run()
 
     return 0
 
-def _run_pytorch_trial():
-    det.common.set_logger(env.debug)
+
+def _run_pytorch_trial(
+    trial_class: PyTorchTrial,
+    info: det.ClusterInfo,
+):
+    det.common.set_logger(info.trial._debug)
     logging.debug("Starting harness.")
 
-    with maybe_periodic_stacktraces(env.debug):
+    with maybe_periodic_stacktraces(info.trial._debug):
         # Step 1: Load user code.
         # We can't build a core.Context without rank information, and we can't gather rank
         # information until the distributed backend is initialized, and we can't initialize the
         # correct distributed backend until we know which Trial class the user implemented.
-        controller_class = load.get_trial_controller_class(trial_class)
         if info.container_rank == 0:
             try:
                 analytics.send_analytics("trial_loaded", analytics.get_trial_analytics(trial_class))
@@ -178,7 +153,7 @@ def _run_pytorch_trial():
 
         # Step 2: Initialize framework-specific details (dtrain framework, random seeds, etc).
         distributed_backend = det._DistributedBackend()
-        controller_class.pre_execute_hook(env, distributed_backend)
+        PyTorchTrialController.pre_execute_hook(info.trial.trial_seed, distributed_backend)
 
         # Step 3: Now that the dtrain framework is initialized, build the DistributedContext object.
         # For harness.py, we only support a fixed set of Determined-provided launch layers, since
@@ -203,53 +178,53 @@ def _run_pytorch_trial():
             preempt_mode=core.PreemptMode.ChiefOnly,
             tensorboard_mode=core.TensorboardMode.MANUAL,
         ) as core_context:
-            if isinstance(trial_class, PyTorchTrial):
-                trial_context = PyTorchTrialContext(
-                    core_context=core_context,
-                    trial_seed=env.trial_seed,
-                    hparams=env.hparams,
-                    slots_per_trial=env.experiment_config.slots_per_trial(),
-                    num_gpus=len(env.container_gpus),
-                    exp_conf=env.experiment_config,
-                    aggregation_frequency=env.experiment_config.get_optimizations_config().get("aggregation_frequency"),
-                    fp16_compression=env.experiment_config.get_optimizations_config().get("gradient_compression"),
-                    average_aggregated_gradients=env.experiment_config.get_optimizations_config().get("average_aggregated_gradients"),
-                    steps_completed=env.steps_completed,
-                )
-            else:
-                trial_context = trial_class.trial_context_class(core_context, env)
+            trial_context = PyTorchTrialContext(
+                core_context=core_context,
+                trial_seed=info.trial.trial_seed,
+                hparams=info.trial.hparams,
+                slots_per_trial=info.trial._config["resources"]["slots_per_trial"],
+                num_gpus=len(info.gpu_uuids),
+                exp_conf=info.trial._config,
+                aggregation_frequency=info.trial._config["optimizations"]["aggregation_frequency"],
+                fp16_compression=info.trial._config["optimizations"]["gradient_compression"],
+                average_aggregated_gradients=info.trial._config["optimizations"]["average_aggregated_gradients"],
+                steps_completed=info.trial._steps_completed,
+            )
 
             # Step 4: Instantiate the user's Trial.
             trial_inst = trial_class(trial_context)
 
             # Step 5: Create a TrialController and execute training
-            logging.info(f"Creating {controller_class.__name__} with {trial_class.__name__}.")
+            logging.info(f"Creating {PyTorchTrialController.__name__} with {trial_class.__name__}.")
 
-            if isinstance(trial_class, PyTorchTrial):
-                controller = PyTorchTrialController(
-                    trial_inst=trial_inst,
-                    context=trial_context,
-                    min_checkpoint_period=TrainUnit.from_values(**env.experiment_config.get_min_checkpoint_period()),
-                    min_validation_period=TrainUnit.from_values(**env.experiment_config.get_min_validation_period()),
-                    average_training_metrics=env.experiment_config.average_training_metrics_enabled(),
-                    checkpoint_policy=env.experiment_config.get_checkpoint_policy(),
-                    smaller_is_better=env.experiment_config.get_smaller_is_better(),
-                    searcher_metric_name=env.experiment_config.get_searcher_metric(),
-                    local_training=False,
-                    det_profiler=ProfilerAgent.from_env(env=env, global_rank=trial_context.distributed.rank,
-                                                        local_rank=trial_context.distributed.local_rank),
-                    steps_completed=env.steps_completed,
-                    debug=env.debug
-                )
-            else:
-                controller = controller_class.from_trial(
-                    trial_inst=trial_inst,
-                    context=trial_context,
-                    env=env,
-                )
+            profiling_enabled = cast(bool, info.trial._config["profiling"]["enabled"])
+            det_profiler = ProfilerAgent(
+                trial_id=str(info.trial.trial_id),
+                agent_id=info.agent_id,
+                master_url=info.master_url,
+                profiling_is_enabled=profiling_enabled,
+                global_rank=core_context.distributed.rank,
+                local_rank=core_context.distributed.local_rank,
+                begin_on_batch=profiling_enabled and cast(int, info.trial._config["profiling"]["begin_on_batch"]) or 0,
+                end_after_batch=profiling_enabled and cast(int, info.trial._config["profiling"]["end_after_batch"]) or 0,
+                sync_timings=cast(bool, info.trial._config["profiling"]["sync_timings"])
+            )
 
+            controller = PyTorchTrialController(
+                trial_inst=trial_inst,
+                context=trial_context,
+                min_checkpoint_period=TrainUnit._from_values(**info.trial._config["min_checkpoint_period"]),
+                min_validation_period=TrainUnit._from_values(**info.trial._config["min_validation_period"]),
+                average_training_metrics=cast(bool, info.trial._config["optimizations"]["average_training_metrics"]),
+                checkpoint_policy=info.trial._config["checkpoint_policy"],
+                smaller_is_better=cast(bool, info.trial._config["searcher"]["smaller_is_better"]),
+                searcher_metric_name=info.trial._config["searcher"]["metric"],
+                local_training=False,
+                det_profiler=det_profiler,
+                steps_completed=info.trial._steps_completed,
+                debug=info.trial._debug,
+            )
             controller.run()
-
     return 0
 
 if __name__ == "__main__":

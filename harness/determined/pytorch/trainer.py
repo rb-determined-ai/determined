@@ -22,24 +22,24 @@ from determined.pytorch import PyTorchTrialContext, PyTorchTrialController
 
 class Trainer:
     def __init__(self, trial: pytorch.PyTorchTrial, context: PyTorchTrialContext):
-        self.trial = trial
-        self.context = context
-        self.cluster_info = det.get_cluster_info()
-        self.core_context = self.context._core
-        self.distributed_backend = det._DistributedBackend()
-        self.det_profiler = DummyProfilerAgent()
-        self.trial_controller = None
-        self.local_training = self.cluster_info is None
+        self._trial = trial
+        self._context = context
+        self._cluster_info = det.get_cluster_info()
+        self._core = self._context._core
+        self._distributed_backend = det._DistributedBackend()
+        self._det_profiler = DummyProfilerAgent()
+        self._trial_controller = None
+        self._local_training = self._cluster_info is None
 
     def configure_profiler(self, sync_timings: bool, enabled: bool, begin_on_batch: int, end_after_batch: int):
-        assert self.cluster_info, "Determined profiler must be run on cluster"
-        self.det_profiler = ProfilerAgent(
-            trial_id=str(self.cluster_info.trial.trial_id),
-            agent_id=self.cluster_info.agent_id,
-            master_url=self.cluster_info.master_url,
+        assert self._cluster_info, "Determined profiler must be run on cluster"
+        self._det_profiler = ProfilerAgent(
+            trial_id=str(self._cluster_info.trial.trial_id),
+            agent_id=self._cluster_info.agent_id,
+            master_url=self._cluster_info.master_url,
             profiling_is_enabled=enabled,
-            global_rank=self.core_context.distributed.get_rank(),
-            local_rank=self.core_context.distributed.get_rank(),
+            global_rank=self._core.distributed.get_rank(),
+            local_rank=self._core.distributed.get_rank(),
             begin_on_batch=begin_on_batch,
             end_after_batch=end_after_batch,
             sync_timings=sync_timings,
@@ -60,7 +60,7 @@ class Trainer:
         debug: Optional[bool] = False,
     ):
 
-        if self.local_training:
+        if self._local_training:
             assert (max_epochs is None) ^ (max_batches is None), \
                 "Either max_batches or max_epochs must be defined in local training mode"
         else:
@@ -69,8 +69,8 @@ class Trainer:
                                 "Please configure the searcher length instead.")
 
         # Set context and training variables
-        self.context._aggregation_frequency = aggregation_frequency
-        self.context._average_aggregated_gradients = average_aggregated_gradients
+        self._context._aggregation_frequency = aggregation_frequency
+        self._context._average_aggregated_gradients = average_aggregated_gradients
 
         max_length = None
         if max_batches:
@@ -87,10 +87,10 @@ class Trainer:
         if isinstance(min_validation_period, int):
             min_validation_period = self._convert_period_to_train_unit(min_validation_period, max_length)
 
-        if self.local_training:
-            self.trial_controller = PyTorchTrialController(
-                trial_inst=self.trial,
-                context=self.context,
+        if self._local_training:
+            self._trial_controller = PyTorchTrialController(
+                trial_inst=self._trial,
+                context=self._context,
                 max_length=max_length,
                 min_validation_period=min_validation_period,
                 min_checkpoint_period=min_checkpoint_period,
@@ -101,26 +101,26 @@ class Trainer:
                 debug=debug
             )
         else:
-            self.trial_controller = PyTorchTrialController(
-                trial_inst=self.trial,
-                context=self.context,
+            self._trial_controller = PyTorchTrialController(
+                trial_inst=self._trial,
+                context=self._context,
                 min_checkpoint_period=min_checkpoint_period,
                 min_validation_period=min_validation_period,
                 average_training_metrics=average_training_metrics,
                 checkpoint_policy=checkpoint_policy,
                 smaller_is_better=smaller_is_better,
-                searcher_metric_name=self.cluster_info.trial._config["searcher"]["metric"],
+                searcher_metric_name=self._cluster_info.trial._config["searcher"]["metric"],
                 local_training=False,
-                det_profiler=self.det_profiler,
-                steps_completed=self.cluster_info.trial._steps_completed,
+                det_profiler=self._det_profiler,
+                steps_completed=self._cluster_info.trial._steps_completed,
                 debug=debug
             )
 
-        self.trial_controller.run()
+        self._trial_controller.run()
 
     def _convert_period_to_train_unit(self, period: int, train_unit: TrainUnit):
         # Local training will assume same period as max_length
-        if self.local_training:
+        if self._local_training:
             if isinstance(train_unit, Batch):
                 return Batch(period)
             elif isinstance(train_unit, Epoch):
@@ -129,11 +129,11 @@ class Trainer:
                 return Record(period)
 
         # On-cluster training assumes period lengths with the searcher
-        searcher_unit = self.core_context.searcher.get_configured_units()
-        return TrainUnit.from_searcher_unit(period, searcher_unit)
+        searcher_unit = self._core.searcher.get_configured_units()
+        return TrainUnit._from_searcher_unit(period, searcher_unit)
 
 
-def initialize_distributed_backend():
+def _initialize_distributed_backend():
     distributed_backend = det._DistributedBackend()
     if distributed_backend.use_horovod():
         hvd.require_horovod_type("torch", "PyTorchTrial is in use.")
@@ -161,7 +161,7 @@ def init(hparams: Optional[Dict] = None,
     local_training = cluster_info is None
 
     # Pre-execute steps: initialize distributed backend and set trial seeds
-    distributed_context = distributed_context or initialize_distributed_backend()
+    distributed_context = distributed_context or _initialize_distributed_backend()
     if local_training:
         trial_seed = _generate_local_seed()
     else:

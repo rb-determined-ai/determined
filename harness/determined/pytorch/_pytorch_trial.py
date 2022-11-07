@@ -39,7 +39,7 @@ class TrainUnit:
         self.value = value
 
     @staticmethod
-    def from_searcher_unit(length: int, unit: core.Unit):
+    def _from_searcher_unit(length: int, unit: core.Unit):
         if unit == core.Unit.EPOCHS:
             return Epoch(length)
         elif unit == core.Unit.RECORDS:
@@ -50,9 +50,9 @@ class TrainUnit:
             raise ValueError(f"unrecognized searcher unit {unit}")
 
     @staticmethod
-    def from_values(batches: Optional[int] = None,
-                    records: Optional[int] = None,
-                    epochs: Optional[int] = None):
+    def _from_values(batches: Optional[int] = None,
+                     records: Optional[int] = None,
+                     epochs: Optional[int] = None):
         if sum((batches is not None, records is not None, epochs is not None)) != 1:
             raise ValueError(f"invalid length: batches={batches} records={records} epochs={epochs}")
         if batches:
@@ -644,7 +644,7 @@ class PyTorchTrialController:
 
     def _train_for_op(self, op: SearcherOperation):
         self._searcher_op = op
-        self._max_length = TrainUnit.from_searcher_unit(op.length, self._searcher_unit)
+        self._max_length = TrainUnit._from_searcher_unit(op.length, self._searcher_unit)
         self._train()
 
         logging.debug(f"Training finished after {op.length} steps.")

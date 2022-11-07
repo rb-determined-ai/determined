@@ -1069,7 +1069,7 @@ class DummyProfilerAgent(ProfilerAgent):
     def record_timing(
         self, metric_name: str, accumulate: bool = False, requires_sync: bool = True
     ) -> Iterator[None]:
-        yield contextlib.nullcontext()
+        yield
 
     def update_batch_idx(self, batch_idx: int):
         pass
