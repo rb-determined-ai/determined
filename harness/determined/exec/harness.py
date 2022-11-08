@@ -3,13 +3,22 @@ import contextlib
 import faulthandler
 import logging
 import sys
-from typing import Iterator, Optional, Dict, Type, cast
+from typing import Iterator, cast
 
 import determined as det
 from determined import core, horovod, load
 from determined.common.api import analytics, certs
 from determined.profiler import ProfilerAgent
-from determined.pytorch import PyTorchTrial, PyTorchTrialController, PyTorchTrialContext, TrainUnit
+
+try:
+    import determined.pytorch
+    from determined.pytorch import PyTorchTrial, PyTorchTrialController, PyTorchTrialContext, TrainUnit
+except ImportError:
+    PyTorchTrial = None
+    PyTorchTrialController = None
+    PyTorchTrialContext = None
+    TrainUnit = None
+    pass
 
 
 @contextlib.contextmanager
@@ -186,7 +195,7 @@ def _run_pytorch_trial(
                 exp_conf=info.trial._config,
                 aggregation_frequency=info.trial._config["optimizations"]["aggregation_frequency"],
                 fp16_compression=info.trial._config["optimizations"]["gradient_compression"],
-                average_aggregated_gradients=info.trial._config["optimizations"]["average_aggregated_gradients"],
+                average_aggregated_gradients=cast(bool, info.trial._config["optimizations"]["average_aggregated_gradients"]),
                 steps_completed=info.trial._steps_completed,
             )
 
@@ -221,10 +230,12 @@ def _run_pytorch_trial(
                 local_training=False,
                 det_profiler=det_profiler,
                 steps_completed=info.trial._steps_completed,
+                latest_checkpoint=info.latest_checkpoint,
                 debug=info.trial._debug,
             )
             controller.run()
     return 0
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

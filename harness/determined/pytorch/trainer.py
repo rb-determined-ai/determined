@@ -1,23 +1,17 @@
 import contextlib
-import pathlib
 import random
-import warnings
-from enum import Enum
 
 import determined as det
-from determined import core, horovod, util
+from determined import core, horovod
 from determined import pytorch
-from typing import Any, Callable, Dict, Iterator, List, Optional, cast, Union
+from typing import Dict, Optional, cast, Union
 import torch
-import torch.nn as nn
-from determined.common import check
 from determined.horovod import hvd
 import torch.distributed as dist
 import logging
 
 from determined.profiler import ProfilerAgent, DummyProfilerAgent
-from determined.pytorch._pytorch_trial import TrainUnit, Batch, Epoch, Record
-from determined.pytorch import PyTorchTrialContext, PyTorchTrialController
+from determined.pytorch import PyTorchTrialContext, PyTorchTrialController, TrainUnit, Batch, Epoch, Record
 
 
 class Trainer:
@@ -114,6 +108,9 @@ class Trainer:
             )
 
         self._trial_controller.run()
+
+    def _train_for(self, max_length: TrainUnit):
+        assert self._local_training, "train_for must only be called in local training mode"
 
     def _convert_period_to_train_unit(self, period: int, train_unit: TrainUnit):
         # Local training will assume same period as max_length
