@@ -124,18 +124,18 @@ class PyTorchTrialController:
 
         if not isinstance(trial_inst, PyTorchTrial):
             raise TypeError("PyTorchTrialController requires a PyTorchTrial.")
-        self.trial = trial_inst
-        self.context = context
-        self.core_context = self.context._core
+        self._trial = trial_inst
+        self._context = context
+        self.core_context = self._context._core
         self.prof = det_profiler
-        self.context._set_determined_profiler(self.prof)
+        self._context._set_determined_profiler(self.prof)
 
         self._local_training = local_training
 
         distributed_backend = det._DistributedBackend()
         self._use_horovod = distributed_backend.use_horovod()
         self._use_torch = distributed_backend.use_torch()
-        self._is_chief = self.context.distributed.rank == 0
+        self._is_chief = self._context.distributed.rank == 0
 
         # Training loop variables
         self._max_length = max_length
@@ -164,11 +164,11 @@ class PyTorchTrialController:
         self._searcher_metric_name = searcher_metric_name
         self._ckpt_policy = checkpoint_policy
         self._smaller_is_better = smaller_is_better
-        self._global_batch_size = self.context.get_global_batch_size()
+        self._global_batch_size = self._context.get_global_batch_size()
 
         if torch.cuda.is_available():
             self.prof._set_sync_device(self._sync_device)
-        self._callbacks = self.trial.build_callbacks()
+        self._callbacks = self._trial.build_callbacks()
         for callback in self._callbacks.values():
             if util.is_overridden(callback.on_checkpoint_end, pytorch.PyTorchCallback):
                 warnings.warn(
@@ -177,12 +177,12 @@ class PyTorchTrialController:
                     FutureWarning,
                 )
 
-        if len(self.context.models) == 0:
+        if len(self._context.models) == 0:
             raise det.errors.InvalidExperimentException(
                 "Must have at least one model. "
                 "This might be caused by not wrapping your model with wrap_model().",
             )
-        if len(self.context.optimizers) == 0:
+        if len(self._context.optimizers) == 0:
             raise det.errors.InvalidExperimentException(
                 "Must have at least one optimizer. "
                 "This might be caused by not wrapping your optimizer with wrap_optimizer().",
@@ -190,7 +190,7 @@ class PyTorchTrialController:
         self._check_evaluate_implementation()
 
         # Currently only horovod and torch backends are supported for distributed training
-        if self.context.distributed.size > 1:
+        if self._context.distributed.size > 1:
             assert (
                 self._use_horovod or self._use_torch
             ), "Must use horovod or torch for distributed training"
@@ -254,10 +254,10 @@ class PyTorchTrialController:
             return
 
         # Aggregate and reduce training metrics from all the training processes.
-        if self.context.distributed.size > 1 and self._average_training_metrics:
+        if self._context.distributed.size > 1 and self._average_training_metrics:
             with self.prof.record_timing("average_training_metrics"):
                 batch_metrics = pytorch._combine_and_average_training_metrics(
-                    self.context.distributed, self._training_metrics
+                    self._context.distributed, self._training_metrics
                 )
         else:
             batch_metrics = self._training_metrics
@@ -268,10 +268,10 @@ class PyTorchTrialController:
         # metrics are even logical for a custom reducer.
         with self.prof.record_timing("reduce_metrics"):
             metrics["avg_metrics"].update(
-                pytorch._convert_metrics_to_numpy(self.context.reduce_metrics(for_training=True))
+                pytorch._convert_metrics_to_numpy(self._context.reduce_metrics(for_training=True))
             )
 
-        metrics = self.context.distributed.broadcast(metrics)
+        metrics = self._context.distributed.broadcast(metrics)
 
         for callback in self._callbacks.values():
             callback.on_training_workload_end(
@@ -293,7 +293,7 @@ class PyTorchTrialController:
                 steps_completed=self.state.batches_trained, metrics=avg_metrics, batch_metrics=batch_metrics
             )
 
-        self.context.reset_reducers()
+        self._context.reset_reducers()
 
         # Clear training metrics for next reporting step
         self._training_metrics = []
@@ -363,13 +363,13 @@ class PyTorchTrialController:
                     "framework": f"torch-{torch.__version__}",
                     "format": "pickle",
                 }
-                with self.context._core.checkpoint.store_path(metadata) as (
+                with self._context._core.checkpoint.store_path(metadata) as (
                     path,
                     storage_id,
                 ):
                     self._save(path)
                     uuid = storage_id
-            uuid = self.context.distributed.broadcast(uuid)
+            uuid = self._context.distributed.broadcast(uuid)
             for callback in self._callbacks.values():
                 callback.on_checkpoint_upload_end(uuid=uuid)
         except det.InvalidHP:
@@ -392,25 +392,25 @@ class PyTorchTrialController:
             )
 
     def _evaluate_batch_defined(self) -> bool:
-        return util.is_overridden(self.trial.evaluate_batch, PyTorchTrial)
+        return util.is_overridden(self._trial.evaluate_batch, PyTorchTrial)
 
     def _evaluate_full_dataset_defined(self) -> bool:
-        return util.is_overridden(self.trial.evaluate_full_dataset, PyTorchTrial)
+        return util.is_overridden(self._trial.evaluate_full_dataset, PyTorchTrial)
 
     def _set_data_loaders(self) -> None:
         skip_batches = self.state.batches_trained
 
-        num_replicas = self.context.distributed.size
-        rank = self.context.distributed.rank
+        num_replicas = self._context.distributed.size
+        rank = self._context.distributed.rank
 
-        train_data = self.trial.build_training_data_loader()
+        train_data = self._trial.build_training_data_loader()
         if isinstance(train_data, pytorch.DataLoader):
             self.training_loader = train_data.get_data_loader(
                 repeat=True, skip=skip_batches, num_replicas=num_replicas, rank=rank
             )
         else:
             # Non-determined DataLoader; ensure the user meant to do this.
-            if not self.context.experimental._data_repro_checks_disabled:
+            if not self._context.experimental._data_repro_checks_disabled:
                 raise RuntimeError(
                     pytorch._dataset_repro_warning("build_training_data_loader", train_data)
                 )
@@ -423,12 +423,12 @@ class PyTorchTrialController:
             epoch_len = len(self.training_loader)
         except TypeError:
             epoch_len = sys.maxsize
-        self.context._epoch_len = self.context.distributed.broadcast(epoch_len)
+        self._context._epoch_len = self._context.distributed.broadcast(epoch_len)
 
         # Validation loader will be undefined on process ranks > 0
         # when the user defines `validate_full_dataset()`.
         self.validation_loader = None  # type: Optional[torch.utils.data.DataLoader]
-        validation_data = self.trial.build_validation_data_loader()
+        validation_data = self._trial.build_validation_data_loader()
         if self._evaluate_batch_defined():
             if isinstance(validation_data, pytorch.DataLoader):
                 self.validation_loader = validation_data.get_data_loader(
@@ -436,7 +436,7 @@ class PyTorchTrialController:
                 )
             else:
                 # Non-determined DataLoader; ensure the user meant to do this.
-                if not self.context.experimental._data_repro_checks_disabled:
+                if not self._context.experimental._data_repro_checks_disabled:
                     raise RuntimeError(
                         pytorch._dataset_repro_warning(
                             "build_validation_data_loader", validation_data
@@ -450,7 +450,7 @@ class PyTorchTrialController:
                 )
             else:
                 # Non-determined DataLoader; ensure the user meant to do this.
-                if not self.context.experimental._data_repro_checks_disabled:
+                if not self._context.experimental._data_repro_checks_disabled:
                     raise RuntimeError(
                         pytorch._dataset_repro_warning(
                             "build_validation_data_loader", validation_data
@@ -462,10 +462,10 @@ class PyTorchTrialController:
         self.state.batches_trained += 1
         self.state.epochs_trained = self._get_epoch_idx(self.state.batches_trained)
         # True epoch-based training is not supported. Epoch start/end is calculated with batch.
-        if self.context.is_epoch_start():
+        if self._context.is_epoch_start():
             self._on_epoch_start(self.state.epochs_trained)
 
-        if self.context.is_epoch_end():
+        if self._context.is_epoch_end():
             self._on_epoch_end(self.state.epochs_trained)
 
         self._train_step()
@@ -520,7 +520,7 @@ class PyTorchTrialController:
         if self.core_context.distributed.rank == 0:
             if self.core_context.preempt.should_preempt():
                 raise ShouldExit()
-        if self.context.get_stop_requested():
+        if self._context.get_stop_requested():
             raise ShouldExit()
 
     def _steps_remaining(self):
@@ -549,7 +549,7 @@ class PyTorchTrialController:
             if self._searcher_unit == core.Unit.BATCHES:
                 op.report_progress(self.state.batches_trained)
             elif self._searcher_unit == core.Unit.RECORDS:
-                op.report_progress(self.context.get_global_batch_size() * self.state.batches_trained)
+                op.report_progress(self._context.get_global_batch_size() * self.state.batches_trained)
             elif self._searcher_unit == core.Unit.EPOCHS:
                 op.report_progress(self.state.epochs_trained)
             else:
@@ -600,14 +600,14 @@ class PyTorchTrialController:
             # If a load path is provided load weights and restore the data location.
             if self._latest_checkpoint is not None:
                 logging.info(f"Restoring trial from checkpoint {self._latest_checkpoint}")
-                with self.context._core.checkpoint.restore_path(
+                with self._context._core.checkpoint.restore_path(
                     self._latest_checkpoint
                 ) as load_path:
                     self._load(load_path)
 
-            if self.context.distributed.size > 1 and self._use_horovod:
-                hvd.broadcast_parameters(self.context._main_model.state_dict(), root_rank=0)
-                for optimizer in self.context.optimizers:
+            if self._context.distributed.size > 1 and self._use_horovod:
+                hvd.broadcast_parameters(self._context._main_model.state_dict(), root_rank=0)
+                for optimizer in self._context.optimizers:
                     hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
             exit_stack.enter_context(self.prof)
@@ -681,7 +681,7 @@ class PyTorchTrialController:
         return searcher_metric
 
     def _get_epoch_idx(self, batch_id: int) -> int:
-        return batch_id // self.context._epoch_len  # type: ignore
+        return batch_id // self._context._epoch_len  # type: ignore
 
     def _auto_step_lr_scheduler_per_batch(
         self, batch_idx: int, lr_scheduler: pytorch.LRScheduler
@@ -690,11 +690,11 @@ class PyTorchTrialController:
         This function automatically steps an LR scheduler. It should be called per batch.
         """
         # Never step lr when we do not step optimizer.
-        if not self.context._should_communicate_and_update():
+        if not self._context._should_communicate_and_update():
             return
 
         if lr_scheduler._step_mode == pytorch.LRScheduler.StepMode.STEP_EVERY_BATCH:
-            start_idx = batch_idx - self.context._aggregation_frequency + 1
+            start_idx = batch_idx - self._context._aggregation_frequency + 1
             for i in range(start_idx, batch_idx + 1):
                 if (i + 1) % lr_scheduler._frequency == 0:
                     lr_scheduler.step()
@@ -704,42 +704,42 @@ class PyTorchTrialController:
         elif lr_scheduler._step_mode == pytorch.LRScheduler.StepMode.STEP_EVERY_EPOCH:
             # We will step if the next optimizer step will land in the next epoch.
             epoch_idx = self._get_epoch_idx(batch_idx)
-            next_steppable_batch = batch_idx + self.context._aggregation_frequency
+            next_steppable_batch = batch_idx + self._context._aggregation_frequency
             next_batch_epoch_idx = self._get_epoch_idx(next_steppable_batch)
             for e in range(epoch_idx, next_batch_epoch_idx):
                 if (e + 1) % lr_scheduler._frequency == 0:
                     lr_scheduler.step()
 
     def _should_update_scaler(self) -> bool:
-        if not self.context._scaler or not self.context.experimental._auto_amp:
+        if not self._context._scaler or not self._context.experimental._auto_amp:
             return False
-        return self.context._should_communicate_and_update()  # type: ignore
+        return self._context._should_communicate_and_update()  # type: ignore
 
     def _train_batch(self, batches_trained, batch, epoch_idx, batch_idx):
         # Set the batch index on the trial context used by step_optimizer
-        self.context._current_batch_idx = batches_trained
+        self._context._current_batch_idx = batches_trained
 
         # Initialize profiler
         batch_start_time = time.time()
         self.prof.update_batch_idx(batch_idx)
 
-        if self.context.experimental._auto_to_device:
+        if self._context.experimental._auto_to_device:
             with self.prof.record_timing("to_device", accumulate=True):
-                batch = self.context.to_device(batch)
+                batch = self._context.to_device(batch)
 
         with contextlib.ExitStack() as exit_stack:
             exit_stack.enter_context(self.prof.record_timing("train_batch", requires_sync=False))
-            if self.context.profiler:
-                exit_stack.enter_context(self.context.profiler)
+            if self._context.profiler:
+                exit_stack.enter_context(self._context.profiler)
 
-            training_metrics = self.trial.train_batch(
+            training_metrics = self._trial.train_batch(
                 batch=batch,
                 epoch_idx=epoch_idx,
                 batch_idx=batch_idx,
             )
 
-            if self.context.profiler:
-                self.context.profiler.step()
+            if self._context.profiler:
+                self._context.profiler.step()
 
         if self._should_update_scaler():
             # We update the scaler once after train_batch is done because the GradScaler is
@@ -748,14 +748,14 @@ class PyTorchTrialController:
             #
             # [1] pytorch.org/docs/master/notes/amp_examples.html
             #         #working-with-multiple-models-losses-and-optimizers
-            self.context._scaler.update()
+            self._context._scaler.update()
 
         if isinstance(training_metrics, torch.Tensor):
             training_metrics = {"loss": training_metrics}
 
         # Step learning rate of a pytorch.LRScheduler.
         with self.prof.record_timing("step_lr_schedulers"):
-            for lr_scheduler in self.context.lr_schedulers:
+            for lr_scheduler in self._context.lr_schedulers:
                 self._auto_step_lr_scheduler_per_batch(batch_idx, lr_scheduler)
 
         with self.prof.record_timing("from_device"):
@@ -768,8 +768,8 @@ class PyTorchTrialController:
                 training_metrics[name] = metric
 
         batch_dur = time.time() - batch_start_time
-        samples_per_second = self.trial.get_batch_length(batch) / batch_dur
-        samples_per_second *= self.context.distributed.size
+        samples_per_second = self._trial.get_batch_length(batch) / batch_dur
+        samples_per_second *= self._context.distributed.size
         self.prof.record_metric("samples_per_second", samples_per_second)
 
         check.is_instance(
@@ -790,11 +790,11 @@ class PyTorchTrialController:
         if self._is_chief:
             self.core_context.train.set_status("validating")
 
-        self.context.reset_reducers()
+        self._context.reset_reducers()
 
         # Set the behavior of certain layers (e.g., dropout) that are
         # different between training and inference.
-        for model in self.context.models:
+        for model in self._context.models:
             model.eval()
 
         step_start_time = time.time()
@@ -823,15 +823,15 @@ class PyTorchTrialController:
             for callback in self._callbacks.values():
                 callback.on_validation_epoch_start()
             for idx, batch in enumerate(self.validation_loader):
-                if self.context.experimental._auto_to_device:
+                if self._context.experimental._auto_to_device:
                     with self.prof.record_timing("to_device", accumulate=True):
-                        batch = self.context.to_device(batch)
-                num_inputs += self.trial.get_batch_length(batch)
+                        batch = self._context.to_device(batch)
+                num_inputs += self._trial.get_batch_length(batch)
 
-                if has_param(self.trial.evaluate_batch, "batch_idx", 2):
-                    vld_metrics = self.trial.evaluate_batch(batch=batch, batch_idx=idx)
+                if has_param(self._trial.evaluate_batch, "batch_idx", 2):
+                    vld_metrics = self._trial.evaluate_batch(batch=batch, batch_idx=idx)
                 else:
-                    vld_metrics = self.trial.evaluate_batch(batch=batch)  # type: ignore
+                    vld_metrics = self._trial.evaluate_batch(batch=batch)  # type: ignore
                 # Verify validation metric names are the same across batches.
                 if keys is None:
                     keys = vld_metrics.keys()
@@ -857,17 +857,17 @@ class PyTorchTrialController:
                 callback.on_validation_epoch_end(batch_metrics)
 
             metrics = pytorch._reduce_metrics(
-                self.context.distributed,
+                self._context.distributed,
                 batch_metrics=batch_metrics,
                 keys=keys,
                 metrics_reducers=pytorch._prepare_metrics_reducers(
-                    self.trial.evaluation_reducer(), keys=keys
+                    self._trial.evaluation_reducer(), keys=keys
                 ),
             )
 
             # Gather a list of per-worker (num_inputs, num_batches) tuples.
-            input_counts = self.context.distributed.gather((num_inputs, idx + 1))
-            if self.context.distributed.rank == 0:
+            input_counts = self._context.distributed.gather((num_inputs, idx + 1))
+            if self._context.distributed.rank == 0:
                 assert input_counts is not None
                 # Reshape and sum.
                 num_inputs, num_batches = [sum(n) for n in zip(*input_counts)]
@@ -876,7 +876,7 @@ class PyTorchTrialController:
             assert self._evaluate_full_dataset_defined(), "evaluate_full_dataset not defined."
             self.validation_loader = cast(torch.utils.data.DataLoader, self.validation_loader)
             if self._is_chief:
-                metrics = self.trial.evaluate_full_dataset(data_loader=self.validation_loader)
+                metrics = self._trial.evaluate_full_dataset(data_loader=self.validation_loader)
 
                 if not isinstance(metrics, dict):
                     raise TypeError(
@@ -884,13 +884,13 @@ class PyTorchTrialController:
                     )
 
                 metrics = pytorch._convert_metrics_to_numpy(metrics)
-                num_inputs = self.context.get_per_slot_batch_size() * len(self.validation_loader)
+                num_inputs = self._context.get_per_slot_batch_size() * len(self.validation_loader)
 
         metrics.update(
-            pytorch._convert_metrics_to_numpy(self.context.reduce_metrics(for_training=False))
+            pytorch._convert_metrics_to_numpy(self._context.reduce_metrics(for_training=False))
         )
 
-        if self.context.distributed.size > 1 and any(
+        if self._context.distributed.size > 1 and any(
             util.is_overridden(c.on_validation_end, pytorch.PyTorchCallback)
             or util.is_overridden(c.on_validation_step_end, pytorch.PyTorchCallback)
             for c in self._callbacks.values()
@@ -899,7 +899,7 @@ class PyTorchTrialController:
                 "Broadcasting metrics to all worker processes to execute a "
                 "validation step end callback"
             )
-            metrics = self.context.distributed.broadcast(metrics)
+            metrics = self._context.distributed.broadcast(metrics)
 
         for callback in self._callbacks.values():
             if util.is_overridden(callback.on_validation_step_end, pytorch.PyTorchCallback):
@@ -925,7 +925,7 @@ class PyTorchTrialController:
 
 
         # Set models back to train mode
-        for model in self.context.models:
+        for model in self._context.models:
             model.train()
         self.core_context.train.set_status("training")
         
@@ -960,14 +960,14 @@ class PyTorchTrialController:
             # Backward compatible with older checkpoint format.
             if "models_state_dict" in checkpoint:
                 raise RuntimeError("Both model_state_dict and models_state_dict in checkpoint.")
-            if len(self.context.models) > 1:
+            if len(self._context.models) > 1:
                 raise RuntimeError(
                     "Old-format checkpoint cannot be loaded into a context with more than one "
                     "model."
                 )
-            self.context.models[0].load_state_dict(checkpoint["model_state_dict"])
+            self._context.models[0].load_state_dict(checkpoint["model_state_dict"])
         else:
-            for idx, model in enumerate(self.context.models):
+            for idx, model in enumerate(self._context.models):
                 model_state_dict = checkpoint["models_state_dict"][idx]
                 try:
                     model.load_state_dict(model_state_dict)
@@ -992,54 +992,54 @@ class PyTorchTrialController:
                 raise RuntimeError(
                     "Both optimizer_state_dict and optimizers_state_dict in checkpoint."
                 )
-            if len(self.context.optimizers) > 1:
+            if len(self._context.optimizers) > 1:
                 raise RuntimeError(
                     "Old-format checkpoint cannot be loaded into a context with more than one "
                     "optimizer."
                 )
-            self.context.optimizers[0].load_state_dict(checkpoint["optimizer_state_dict"])
+            self._context.optimizers[0].load_state_dict(checkpoint["optimizer_state_dict"])
         else:
-            for idx, optimizer in enumerate(self.context.optimizers):
+            for idx, optimizer in enumerate(self._context.optimizers):
                 optimizer.load_state_dict(checkpoint["optimizers_state_dict"][idx])
 
         if "lr_scheduler" in checkpoint:
             # Backward compatible with older checkpoint format.
             if "lr_schedulers_state_dict" in checkpoint:
                 raise RuntimeError("Both lr_scheduler and lr_schedulers_state_dict in checkpoint.")
-            if len(self.context.lr_schedulers) > 1:
+            if len(self._context.lr_schedulers) > 1:
                 raise RuntimeError(
                     "Old-format checkpoint cannot be loaded into a context with more than one LR "
                     "scheduler."
                 )
-            self.context.lr_schedulers[0].load_state_dict(checkpoint["lr_scheduler"])
+            self._context.lr_schedulers[0].load_state_dict(checkpoint["lr_scheduler"])
         else:
-            for idx, lr_scheduler in enumerate(self.context.lr_schedulers):
+            for idx, lr_scheduler in enumerate(self._context.lr_schedulers):
                 lr_scheduler.load_state_dict(checkpoint["lr_schedulers_state_dict"][idx])
 
         if "scaler_state_dict" in checkpoint:
-            if self.context._scaler:
-                self.context._scaler.load_state_dict(checkpoint["scaler_state_dict"])
+            if self._context._scaler:
+                self._context._scaler.load_state_dict(checkpoint["scaler_state_dict"])
             else:
                 logging.warning(
                     "There exists scaler_state_dict in checkpoint but the experiment is not using "
                     "AMP."
                 )
         else:
-            if self.context._scaler:
+            if self._context._scaler:
                 logging.warning(
                     "The experiment is using AMP but scaler_state_dict does not exist in the "
                     "checkpoint."
                 )
 
         if "amp_state" in checkpoint:
-            if self.context._use_apex:
+            if self._context._use_apex:
                 apex.amp.load_state_dict(checkpoint["amp_state"])
             else:
                 logging.warning(
                     "There exists amp_state in checkpoint but the experiment is not using Apex."
                 )
         else:
-            if self.context._use_apex:
+            if self._context._use_apex:
                 logging.warning(
                     "The experiment is using Apex but amp_state does not exist in the checkpoint."
                 )
@@ -1053,7 +1053,7 @@ class PyTorchTrialController:
             if torch.cuda.device_count():
                 if "gpu_rng_state" in rng_state:
                     torch.cuda.set_rng_state(
-                        rng_state["gpu_rng_state"], device=self.context.distributed.local_rank
+                        rng_state["gpu_rng_state"], device=self._context.distributed.local_rank
                     )
                 else:
                     logging.warning(
@@ -1119,7 +1119,7 @@ class PyTorchTrialController:
 
         if torch.cuda.device_count():
             rng_state["gpu_rng_state"] = torch.cuda.get_rng_state(
-                self.context.distributed.local_rank
+                self._context.distributed.local_rank
             )
 
         # PyTorch uses optimizer objects that take the model parameters to
@@ -1128,21 +1128,21 @@ class PyTorchTrialController:
         # objects) to avoid breaking the connection between the model and the
         # optimizer.
         checkpoint = {
-            "models_state_dict": [model.state_dict() for model in self.context.models],
+            "models_state_dict": [model.state_dict() for model in self._context.models],
             "optimizers_state_dict": [
-                optimizer.state_dict() for optimizer in self.context.optimizers
+                optimizer.state_dict() for optimizer in self._context.optimizers
             ],
             "lr_schedulers_state_dict": [
-                lr_scheduler.state_dict() for lr_scheduler in self.context.lr_schedulers
+                lr_scheduler.state_dict() for lr_scheduler in self._context.lr_schedulers
             ],
             "callbacks": {name: callback.state_dict() for name, callback in self._callbacks.items()},
             "rng_state": rng_state,
         }
 
-        if self.context._scaler:
-            checkpoint["scaler_state_dict"] = self.context._scaler.state_dict()
+        if self._context._scaler:
+            checkpoint["scaler_state_dict"] = self._context._scaler.state_dict()
 
-        if self.context._use_apex:
+        if self._context._use_apex:
             checkpoint["amp_state"] = apex.amp.state_dict()
 
         for callback in self._callbacks.values():
@@ -1153,13 +1153,13 @@ class PyTorchTrialController:
         with path.joinpath("trial_state.pkl").open("wb") as f:
             pickle.dump(vars(self.state), f)
 
-        trial_cls = type(self.trial)
+        trial_cls = type(self._trial)
         with open(path.joinpath("load_data.json"), "w") as f2:
             json.dump(
                 {
                     "trial_type": "PyTorchTrial",
-                    "experiment_config": self.context.get_experiment_config(),
-                    "hparams": self.context.get_hparams(),
+                    "experiment_config": self._context.get_experiment_config(),
+                    "hparams": self._context.get_hparams(),
                     "trial_cls_spec": f"{trial_cls.__module__}:{trial_cls.__qualname__}",
                 },
                 f2,
@@ -1171,7 +1171,7 @@ class PyTorchTrialController:
             callback.on_checkpoint_write_end(str(path))
 
     def _sync_device(self) -> None:
-        torch.cuda.synchronize(self.context.device)
+        torch.cuda.synchronize(self._context.device)
 
     @staticmethod
     def _add_prefix_in_state_dict_if_not_present(state_dict: Dict[str, Any], prefix: str) -> None:

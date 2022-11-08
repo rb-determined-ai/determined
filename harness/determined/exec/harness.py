@@ -6,11 +6,10 @@ import sys
 from typing import Iterator, Optional, Dict, Type, cast
 
 import determined as det
-from determined import core, horovod, load, pytorch
+from determined import core, horovod, load
 from determined.common.api import analytics, certs
 from determined.profiler import ProfilerAgent
-from determined.pytorch import PyTorchTrial, PyTorchTrialController, PyTorchTrialContext
-from determined.pytorch._pytorch_trial import TrainUnit
+from determined.pytorch import PyTorchTrial, PyTorchTrialController, PyTorchTrialContext, TrainUnit
 
 
 @contextlib.contextmanager

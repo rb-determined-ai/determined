@@ -57,7 +57,6 @@ class Trainer:
         aggregation_frequency: Optional[int] = 1,
         checkpoint_policy: Optional[str] = "best",
         smaller_is_better: Optional[bool] = True,
-        debug: Optional[bool] = False,
     ):
 
         if self._local_training:
@@ -98,7 +97,6 @@ class Trainer:
                 checkpoint_policy=checkpoint_policy,
                 smaller_is_better=smaller_is_better,
                 local_training=True,
-                debug=debug
             )
         else:
             self._trial_controller = PyTorchTrialController(
@@ -113,10 +111,28 @@ class Trainer:
                 local_training=False,
                 det_profiler=self._det_profiler,
                 steps_completed=self._cluster_info.trial._steps_completed,
-                debug=debug
             )
 
         self._trial_controller.run()
+
+    def train_for(self,
+                  max_epochs,
+                  max_batches,
+                  average_training_metrics: Optional[bool] = True,
+                  average_aggregated_gradients: Optional[bool] = True,
+                  debug: Optional[bool] = False,
+                  ) -> Dict:
+        pass
+
+    # see if we still need to support average_training_metrics = False (ryan)
+    #
+
+    def validate(self) -> Dict:
+        pass
+
+    def checkpoint(self) -> str:
+        pass
+
 
     def _convert_period_to_train_unit(self, period: int, train_unit: TrainUnit):
         # Local training will assume same period as max_length
