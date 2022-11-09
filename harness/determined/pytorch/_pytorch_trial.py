@@ -561,18 +561,19 @@ class PyTorchTrialController:
         elif isinstance(self._min_validation_period, Record):
             return (self._state.batches_trained * self._global_batch_size) - max(self._min_validation_period.value, 1)
 
-    def _train_for_step(self, training_iter: Iterator, max_batches: int, max_epochs: int) -> Tuple[TrainUnit, Dict]:
+    def _train_for_step(self, training_iter: Iterator, train_unit: TrainUnit) -> Tuple[TrainUnit, Dict]:
         training_metrics = {}
+
         for batch_idx, batch in enumerate(training_iter):
             batch_metrics = self._train_batch(self._state.batches_trained, batch,
                                               self._state.epochs_trained, batch_idx)
             self._step_batch()
 
             training_metrics[batch_idx] = batch_metrics
-            if batch_idx == max_batches:
+            if isinstance(train_unit, Batch) and batch_idx == train_unit.value:
                 return Batch(batch_idx), training_metrics
-            if batch_idx // self._context._epoch_len == max_epochs:
-                return Epoch(max_epochs), training_metrics
+            if isinstance(train_unit, Epoch) and batch_idx // self._context._epoch_len == train_unit.value:
+                return Epoch(train_unit.value), training_metrics
 
     def _train_unit_to_batches(self, train_unit: TrainUnit):
         if isinstance(train_unit, Batch):
@@ -691,24 +692,21 @@ class PyTorchTrialController:
 
             for op in self.core_context.searcher.operations():
                 while self._steps_until_op_complete() > 0:
-                    searcher_length = TrainUnit._from_searcher_unit(op.length, self._searcher_unit)
-                    epoch_periods = [
-                        period for period in [
-                            self._min_checkpoint_period, self._min_validation_period, searcher_length
-                        ] if isinstance(period, Epoch)
-                    ]
-                    batch_periods = [
-                        period for period in [
-                            self._min_checkpoint_period, self._min_validation_period, searcher_length
-                        ] if isinstance(period, Batch)
-                    ]
-
-                    train_until_epoch = max(epoch_periods, key=lambda x: x.value)
-                    train_until_batch = max(batch_periods, key=lambda x: x.value)
+                    next_train_step = max(
+                        1,
+                        min(
+                            [
+                                self._min_checkpoint_period,
+                                self._min_validation_period,
+                                self._scheduling_unit,
+                                self._steps_until_op_complete()
+                            ],
+                            key=lambda x: x.value # some helper comparator method here to decide length (needs to know epoch length)
+                        )
+                    )
 
                     self._train_for_step(training_iter=self.training_iterator,
-                                         max_epochs=train_until_epoch.value,
-                                         max_batches=train_until_batch.value)
+                                         train_unit=next_train_step)
 
                     self._report_searcher_progress(self._searcher_op)
                     if self._training_metrics:
@@ -774,6 +772,9 @@ class PyTorchTrialController:
         # Checkpoint if last checkpoint is not current
         if self._state.last_ckpt != self._state.batches_trained:
             self._checkpoint(already_exiting=False)
+
+    def _generate_train_schedule(self, val_period: TrainUnit, checkpoint_period, TrainUnit, epoch_len: int, scheduling_unit: TrainUnit):
+        return
 
     def _validate_searcher_metric(self, val_metrics):
         if self._searcher_metric_name not in val_metrics:
