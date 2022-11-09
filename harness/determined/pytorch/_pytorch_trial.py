@@ -1,4 +1,5 @@
 import contextlib
+import enum
 import json
 import logging
 import pathlib
@@ -9,7 +10,7 @@ import time
 import warnings
 from abc import abstractmethod
 from inspect import signature
-from typing import Any, Callable, Dict, Iterator, Optional, Type, Union, cast
+from typing import Any, Callable, Dict, Iterator, Optional, Type, Union, cast, Tuple, List
 
 import numpy as np
 import torch
@@ -71,6 +72,19 @@ class Batch(TrainUnit):
 
 class Record(TrainUnit):
     pass
+
+
+class _TrainStepType(enum.Enum):
+    CHECKPOINT = "CHECKPOINT"
+    TRAIN = "TRAIN"
+    VALIDATE = "VALIDATE"
+
+
+# XXX: should this be private? will be returned from .train() but is only used internally
+class _TrainStep:
+    def __init__(self, train_step_type: _TrainStepType, train_unit: TrainUnit):
+        self.step_type = train_step_type
+        self.unit = train_unit
 
 
 class ShouldExit(Exception):
@@ -151,7 +165,9 @@ class PyTorchTrialController:
             self._trial_id = self.core_context.train._trial_id
 
         self._state = TrialState(trial_id=self._trial_id,
-                                batches_trained=steps_completed)
+                                 batches_trained=steps_completed)
+        self._start_from_batch = steps_completed
+
         self._searcher_op = None
         self._searcher_unit = self.core_context.searcher.get_configured_units()
         self._training_metrics = []
@@ -468,8 +484,6 @@ class PyTorchTrialController:
         if self._context.is_epoch_end():
             self._on_epoch_end(self._state.epochs_trained)
 
-        self._train_step()
-
     def _should_validate(self) -> bool:
         if isinstance(self._min_validation_period, Batch):
             return self._state.batches_trained % max(self._min_validation_period.value, 1) == 0
@@ -489,7 +503,6 @@ class PyTorchTrialController:
             return (self._state.batches_trained * self._global_batch_size) % max(self._min_checkpoint_period.value, 1) == 0
         else:
             return False
-
 
     def _train_step(self):
         should_validate = self._should_validate()
@@ -540,16 +553,53 @@ class PyTorchTrialController:
         elif isinstance(self._min_checkpoint_period, Record):
             return (self._state.batches_trained * self._global_batch_size) - max(self._min_checkpoint_period.value, 1)
 
+    def _steps_until_validation(self):
+        if isinstance(self._min_validation_period, Batch):
+            return self._state.batches_trained - max(self._min_validation_period.value, 1)
+        elif isinstance(self._min_validation_period, Epoch):
+            return self._state.epochs_trained - max(self._min_validation_period.value, 1)
+        elif isinstance(self._min_validation_period, Record):
+            return (self._state.batches_trained * self._global_batch_size) - max(self._min_validation_period.value, 1)
+
+    def _train_for_step(self, training_iter: Iterator, max_batches: int, max_epochs: int) -> Tuple[TrainUnit, Dict]:
+        training_metrics = {}
+        for batch_idx, batch in enumerate(training_iter):
+            batch_metrics = self._train_batch(self._state.batches_trained, batch,
+                                              self._state.epochs_trained, batch_idx)
+            self._step_batch()
+
+            training_metrics[batch_idx] = batch_metrics
+            if batch_idx == max_batches:
+                return Batch(batch_idx), training_metrics
+            if batch_idx // self._context._epoch_len == max_epochs:
+                return Epoch(max_epochs), training_metrics
+
+    def _train_unit_to_batches(self, train_unit: TrainUnit):
+        if isinstance(train_unit, Batch):
+            return train_unit.value
+        elif isinstance(train_unit, Epoch):
+            return self._context._epoch_len * train_unit.value
+        elif isinstance(train_unit, Record):
+            return max(train_unit.value // self._global_batch_size, 1)
+
     def _train(self):
         self.core_context.train.set_status("training")
-        if self._steps_remaining() == 0:
-            return
         for batch_idx, batch in enumerate(self.training_iterator):
             training_metrics = self._train_batch(self._state.batches_trained, batch,
                                                  self._state.epochs_trained, batch_idx)
             self._training_metrics.append(training_metrics)
             self._step_batch()
             if self._steps_remaining() == 0:
+                return
+
+    def _training_step(self, stop_batch: int):
+        self.core_context.train.set_status("training")
+        for batch_idx, batch in enumerate(self.training_iterator, self._state.batches_trained):
+            training_metrics = self._train_batch(self._state.batches_trained, batch,
+                                                 self._state.epochs_trained, batch_idx)
+            self._training_metrics.append(training_metrics)
+            self._step_batch()
+            if self._state.batches_trained == stop_batch:
                 return
 
     def _report_searcher_progress(self, op: core.SearcherOperation):
@@ -565,6 +615,14 @@ class PyTorchTrialController:
                 op.report_progress(self._state.epochs_trained)
             else:
                 raise ValueError(f"unrecognized searcher op unit: {self._searcher_unit}")
+
+    def _steps_until_op_complete(self):
+        if isinstance(self._searcher_unit, core.Unit.BATCHES):
+            return self._state.batches_trained - self._searcher_op.length
+        elif isinstance(self._min_validation_period, Epoch):
+            return self._state.epochs_trained - self._searcher_op.length
+        elif isinstance(self._min_validation_period, Record):
+            return (self._state.batches_trained * self._global_batch_size) - self._searcher_op.length
 
     def run(self):
         @contextlib.contextmanager
@@ -632,9 +690,54 @@ class PyTorchTrialController:
                 return
 
             for op in self.core_context.searcher.operations():
-                self._train_for_op(op)
-                if self._is_chief:
-                    assert op._completed, "logic error; op was never completed"
+                while self._steps_until_op_complete() > 0:
+                    searcher_length = TrainUnit._from_searcher_unit(op.length, self._searcher_unit)
+                    epoch_periods = [
+                        period for period in [
+                            self._min_checkpoint_period, self._min_validation_period, searcher_length
+                        ] if isinstance(period, Epoch)
+                    ]
+                    batch_periods = [
+                        period for period in [
+                            self._min_checkpoint_period, self._min_validation_period, searcher_length
+                        ] if isinstance(period, Batch)
+                    ]
+
+                    train_until_epoch = max(epoch_periods, key=lambda x: x.value)
+                    train_until_batch = max(batch_periods, key=lambda x: x.value)
+
+                    self._train_for_step(training_iter=self.training_iterator,
+                                         max_epochs=train_until_epoch.value,
+                                         max_batches=train_until_batch.value)
+
+                    self._report_searcher_progress(self._searcher_op)
+                    if self._training_metrics:
+                        self._report_training_metrics()
+
+                    if self._should_checkpoint():
+                        self._checkpoint(already_exiting=False)
+
+                    if self._should_validate():
+                        val_metrics = self._validate()
+                        self._report_validation_metrics(val_metrics)
+
+                    self._upload_tb_files()
+                    self._stop_requested()
+
+                # Report metrics after searcher complete if there are remaining unreported
+                self._report_training_metrics()
+
+                # Validate and report validation metrics if last validation step is not current step
+                if self._state.last_val != self._state.batches_trained:
+                    val_metrics = self._validate()
+                    self._report_validation_metrics(val_metrics)
+
+                # Checkpoint if last checkpoint is not current
+                if self._state.last_ckpt != self._state.batches_trained:
+                    self._checkpoint(already_exiting=False)
+
+        if self._is_chief:
+            assert op._completed, "logic error; op was never completed"
 
     def _train_for_local(self):
         self._train()
@@ -939,7 +1042,7 @@ class PyTorchTrialController:
         for model in self._context.models:
             model.train()
         self.core_context.train.set_status("training")
-        
+
         if self._is_chief:
             return metrics
         else:
