@@ -102,7 +102,7 @@ class ShouldExit(Exception):
         self.skip_exit_checkpoint = skip_exit_checkpoint
 
 
-class TrialState:
+class _TrialState:
     def __init__(
         self,
         trial_id: int = 0,
@@ -110,8 +110,8 @@ class TrialState:
         steps_completed: int = 0,
         step_id: int = 0,
         last_val: int = 0,
-        batches_trained: int = None,
-        epochs_trained: int = None,
+        batches_trained: int = 0,
+        epochs_trained: int = 0,
     ) -> None:
         # Store TrialID to distinguish between e.g. pause/restart and continue training.
         self.trial_id = trial_id
@@ -174,7 +174,7 @@ class PyTorchTrialController:
         else:
             self._trial_id = self._core_context.train._trial_id
 
-        self._state = TrialState(trial_id=self._trial_id, batches_trained=steps_completed)
+        self._state = _TrialState(trial_id=self._trial_id, batches_trained=steps_completed)
         self._start_from_batch = steps_completed
         self._val_from_previous_run = self._core_context.train._get_last_validation()
 
@@ -1177,7 +1177,7 @@ class PyTorchTrialController:
         if state.get("trial_id") != self._trial_id:
             return
 
-        self._state = TrialState(**state)
+        self._state = _TrialState(**state)
 
         # Detect the case where the final validation we made was against this exact checkpoint.  In
         # that case, the master will know about the validation, but it would not appear in the

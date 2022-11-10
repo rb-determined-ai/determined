@@ -1,18 +1,14 @@
 import contextlib
 import logging
 import pathlib
-import pickle
-import random
-from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Type, Union, cast
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple, Type, Union
 
-import numpy as np
 import torch
 import torch.nn as nn
 
 import determined as det
-from determined import profiler, pytorch, util
+from determined import profiler, pytorch, util, tensorboard
 from determined.horovod import hvd
-from determined.tensorboard import get_base_path
 
 # Apex is included only for GPU trials.
 try:
@@ -388,7 +384,7 @@ class PyTorchTrialContext(pytorch._PyTorchReducerContext):
         when training.
         """
         self.profiler = torch.profiler.profile(
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(str(get_base_path({}))),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(str(tensorboard.get_base_path({}))),
             *args,
             **kwargs,
         )
