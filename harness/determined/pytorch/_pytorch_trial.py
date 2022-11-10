@@ -1475,9 +1475,6 @@ class PyTorchTrial(det.Trial):
         """
         pass
 
-    def predict_batch(self, batch: pytorch.TorchData) -> Dict[str, Any]:
-        pass
-
     def evaluation_reducer(self) -> Union[pytorch.Reducer, Dict[str, pytorch.Reducer]]:
         """
         Return a reducer for all evaluation metrics, or a dict mapping metric

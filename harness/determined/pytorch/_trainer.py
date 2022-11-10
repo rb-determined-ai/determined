@@ -33,7 +33,7 @@ class Trainer:
             master_url=self._cluster_info.master_url,
             profiling_is_enabled=enabled,
             global_rank=self._core.distributed.get_rank(),
-            local_rank=self._core.distributed.get_rank(),
+            local_rank=self._core.distributed.get_local_rank(),
             begin_on_batch=begin_on_batch,
             end_after_batch=end_after_batch,
             sync_timings=sync_timings,
@@ -177,8 +177,6 @@ def init(
 
     pytorch.PyTorchTrialController._set_random_seeds(trial_seed)
 
-    logging.basicConfig(level=logging.INFO, format=det.LOG_FORMAT)
-
     with core.init(
         distributed=distributed_context,
         preempt_mode=core.PreemptMode.ChiefOnly,
@@ -186,7 +184,10 @@ def init(
     ) as core_context:
         if local_training:
             context = pytorch.PyTorchTrialContext(
-                hparams=hparams, core_context=core_context, trial_seed=trial_seed, managed_training=False
+                hparams=hparams,
+                core_context=core_context,
+                trial_seed=trial_seed,
+                managed_training=False,
             )
         else:
             exp_conf = cluster_info.trial._config

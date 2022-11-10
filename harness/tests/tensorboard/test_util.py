@@ -63,7 +63,9 @@ def test_is_numerical_scalar() -> None:
 def test_list_tb_files(tmp_path: pathlib.Path) -> None:
     env = get_dummy_env()
     base_path = tensorboard.get_base_path({"base_path": BASE_PATH})
-    sync_path = tensorboard.get_sync_path(env.det_cluster_id, env.det_experiment_id, env.det_trial_id)
+    sync_path = tensorboard.get_sync_path(
+        env.det_cluster_id, env.det_experiment_id, env.det_trial_id
+    )
 
     manager = SharedFSTensorboardManager(str(tmp_path), base_path, sync_path)
     test_files = [
@@ -82,7 +84,9 @@ def test_list_tb_files(tmp_path: pathlib.Path) -> None:
 def test_list_tb_files_nonexistent_directory(tmp_path: pathlib.Path) -> None:
     env = get_dummy_env()
     base_path = pathlib.Path("/non-existent-directory")
-    sync_path = tensorboard.get_sync_path(env.det_cluster_id, env.det_experiment_id, env.det_trial_id)
+    sync_path = tensorboard.get_sync_path(
+        env.det_cluster_id, env.det_experiment_id, env.det_trial_id
+    )
     manager = SharedFSTensorboardManager(str(tmp_path), base_path, sync_path)
 
     assert not pathlib.Path(base_path).exists()

@@ -3,12 +3,11 @@ import logging
 import os
 import pathlib
 import sys
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Type, cast
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Type
 
 import determined as det
 from determined import constants, core, gpu, load
 from determined.common import api
-from determined.pytorch import PyTorchTrial, PyTorchTrialContext
 
 
 class InvalidHP(Exception):

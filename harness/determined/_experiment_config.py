@@ -73,9 +73,3 @@ class ExperimentConfig(dict):
         if isinstance(entrypoint, list) and any(not isinstance(e, str) for e in entrypoint):
             raise ValueError("invalid entrypoint in experiment config: {entrypoint}")
         return entrypoint
-
-    def get_checkpoint_policy(self) -> str:
-        return self.get("checkpoint_policy", None)
-
-    def get_smaller_is_better(self) -> bool:
-        return cast(bool, self.get("searcher", {}).get("smaller_is_better", None))

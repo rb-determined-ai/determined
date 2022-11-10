@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 
 import determined as det
-from determined import profiler, pytorch, util, tensorboard
+from determined import profiler, pytorch, tensorboard, util
 from determined.horovod import hvd
 
 # Apex is included only for GPU trials.
@@ -28,27 +28,6 @@ except ImportError:  # pragma: no cover
     if torch.cuda.is_available():
         logging.warning("PyTorch AMP is unavailable.")
     pass
-
-
-class TrialState:
-    def __init__(
-        self,
-        trial_id: int,
-        last_ckpt: int = 0,
-        steps_completed: int = 0,
-        step_id: int = 0,
-        last_val: int = 0,
-        batches_trained: int = None,
-        epochs_trained: int = None,
-    ) -> None:
-        # Store TrialID to distinguish between e.g. pause/restart and continue training.
-        self.trial_id = trial_id
-        self.last_ckpt = last_ckpt
-        self.steps_completed = steps_completed
-        self.step_id = step_id
-        self.last_val = last_val
-        self.batches_trained = batches_trained
-        self.epochs_trained = epochs_trained
 
 
 class PyTorchTrialContext(pytorch._PyTorchReducerContext):
@@ -384,7 +363,9 @@ class PyTorchTrialContext(pytorch._PyTorchReducerContext):
         when training.
         """
         self.profiler = torch.profiler.profile(
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(str(tensorboard.get_base_path({}))),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                str(tensorboard.get_base_path({}))
+            ),
             *args,
             **kwargs,
         )
