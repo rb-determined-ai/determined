@@ -195,6 +195,7 @@ def _run_pytorch_trial(
                     bool, info.trial._config["optimizations"]["average_aggregated_gradients"]
                 ),
                 steps_completed=info.trial._steps_completed,
+                managed_training=True,
             )
 
             # Step 4: Instantiate the user's Trial.

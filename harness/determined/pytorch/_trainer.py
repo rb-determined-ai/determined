@@ -184,10 +184,9 @@ def init(
         preempt_mode=core.PreemptMode.ChiefOnly,
         tensorboard_mode=core.TensorboardMode.MANUAL,
     ) as core_context:
-
         if local_training:
             context = pytorch.PyTorchTrialContext(
-                hparams=hparams, core_context=core_context, trial_seed=trial_seed
+                hparams=hparams, core_context=core_context, trial_seed=trial_seed, managed_training=False
             )
         else:
             exp_conf = cluster_info.trial._config
@@ -206,5 +205,6 @@ def init(
                     bool, exp_conf["optimizations"]["average_aggregated_gradients"]
                 ),
                 steps_completed=cluster_info.trial._steps_completed,
+                managed_training=True,
             )
         yield context

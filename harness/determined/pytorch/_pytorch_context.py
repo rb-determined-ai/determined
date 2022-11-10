@@ -84,6 +84,7 @@ class PyTorchTrialContext(pytorch._PyTorchReducerContext):
         fp16_compression: Optional[bool] = False,
         average_aggregated_gradients: Optional[bool] = False,
         steps_completed: Optional[int] = 0,
+        managed_training: Optional[bool] = True,
     ) -> None:
         self._core = core_context
         self.distributed = self._core.distributed
@@ -134,8 +135,7 @@ class PyTorchTrialContext(pytorch._PyTorchReducerContext):
         self._reducers = pytorch._PyTorchReducerContext()
         self._determined_profiler = None  # type: Optional[profiler.ProfilerAgent]
 
-        self._cluster_info = det.get_cluster_info()
-        self._managed_training = self._cluster_info and self._cluster_info.task_type == "TRIAL"
+        self._managed_training = managed_training
 
         self._aggregation_frequency = aggregation_frequency
         self._fp16_compression = fp16_compression
