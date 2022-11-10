@@ -1,6 +1,5 @@
 import os
 import pathlib
-import random
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Type, cast
 
 import numpy as np
@@ -10,7 +9,6 @@ from tensorflow.keras import utils as keras_utils
 
 import determined as det
 from determined import core, gpu, keras, workload
-from determined.pytorch import Batch, PyTorchTrial, PyTorchTrialContext, PyTorchTrialController
 
 
 class TrainAndValidate:
