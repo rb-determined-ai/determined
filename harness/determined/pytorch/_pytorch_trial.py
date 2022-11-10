@@ -745,7 +745,7 @@ class PyTorchTrialController:
         if not self._validation_is_current():
             self._validate_for_op(op, searcher_length)
 
-        if not self._checkpoint_is_current():
+        if not self._checkpoint_is_current() and self._is_chief:
             self._checkpoint(already_exiting=False)
 
         if self._is_chief:
