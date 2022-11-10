@@ -81,6 +81,10 @@ class Trainer:
             min_validation_period = self._convert_period_to_train_unit(min_validation_period, max_length)
 
         if self._local_training:
+            if checkpoint_policy != "all":
+                logging.warning("Checkpoint policy set to 'all' in local training mode.")
+                checkpoint_policy = "all"
+
             self._trial_controller = PyTorchTrialController(
                 trial_inst=self._trial,
                 context=self._context,
