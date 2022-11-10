@@ -742,11 +742,11 @@ class PyTorchTrialController:
                 self._stop_requested()
 
         # Finished training for op. Perform final checkpoint/validation if necessary.
-        if not self._checkpoint_is_current():
-            self._checkpoint(already_exiting=False)
-
         if not self._validation_is_current():
             self._validate_for_op(op, searcher_length)
+
+        if not self._checkpoint_is_current():
+            self._checkpoint(already_exiting=False)
 
         if self._is_chief:
             assert op._completed, "logic error; op was never completed"
