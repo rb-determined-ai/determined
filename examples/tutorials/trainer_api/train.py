@@ -19,8 +19,7 @@ class Flatten(nn.Module):
 class MNistTrial(pytorch.PyTorchTrial):
     def __init__(self, context: PyTorchTrialContext) -> None:
         self.context = context
-        self.download_directory = f"/tmp/data-rank{self.context.distributed.get_rank()}"
-        self.data_downloaded = False
+        self.download_directory = f"/tmp/mnist-data"
         self.model = context.wrap_model(nn.Sequential(
             nn.Conv2d(1, 32, 3, 1),
             nn.ReLU(),
@@ -76,37 +75,43 @@ class MNistTrial(pytorch.PyTorchTrial):
         return {"validation_loss": validation_loss, "accuracy": accuracy}
 
     def build_training_data_loader(self) -> DataLoader:
-        train_set = datasets.MNIST(
-            self.download_directory,
-            train=True,
-            download=not self.data_downloaded,
-            transform=transforms.Compose(
-                [
-                    transforms.ToTensor(),
-                    # These are the precomputed mean and standard deviation of the
-                    # MNIST data; this normalizes the data to have zero mean and unit
-                    # standard deviation.
-                    transforms.Normalize((0.1307,), (0.3081,)),
-                ]
-            ),
-        )
+        import os
+        import filelock
+        with filelock.FileLock(os.path.join(self.download_directory, "lock")):
+            train_set = datasets.MNIST(
+                self.download_directory,
+                train=True,
+                download=True,
+                transform=transforms.Compose(
+                    [
+                        transforms.ToTensor(),
+                        # These are the precomputed mean and standard deviation of the
+                        # MNIST data; this normalizes the data to have zero mean and unit
+                        # standard deviation.
+                        transforms.Normalize((0.1307,), (0.3081,)),
+                    ]
+                ),
+            )
         return DataLoader(train_set, batch_size=self.batch_size)
 
     def build_validation_data_loader(self) -> DataLoader:
-        validation_set = datasets.MNIST(
-            self.download_directory,
-            train=False,
-            download=not self.data_downloaded,
-            transform=transforms.Compose(
-                [
-                    transforms.ToTensor(),
-                    # These are the precomputed mean and standard deviation of the
-                    # MNIST data; this normalizes the data to have zero mean and unit
-                    # standard deviation.
-                    transforms.Normalize((0.1307,), (0.3081,)),
-                ]
+        import os
+        import filelock
+        with filelock.FileLock(os.path.join(self.download_directory, "lock")):
+            validation_set = datasets.MNIST(
+                self.download_directory,
+                train=False,
+                download=True,
+                transform=transforms.Compose(
+                    [
+                        transforms.ToTensor(),
+                        # These are the precomputed mean and standard deviation of the
+                        # MNIST data; this normalizes the data to have zero mean and unit
+                        # standard deviation.
+                        transforms.Normalize((0.1307,), (0.3081,)),
+                    ]
+                )
             )
-        )
         return DataLoader(validation_set, batch_size=self.batch_size)
 
 
