@@ -75,13 +75,6 @@ class MNistTrial(pytorch.PyTorchTrial):
 
         return {"validation_loss": validation_loss, "accuracy": accuracy}
 
-    def predict_batch(self, batch: pytorch.TorchData) -> Dict[str, Any]:
-        batch = cast(Tuple[torch.Tensor, torch.Tensor], batch)
-        data, _ = batch
-        data = self.context.to_device(data)
-        result = self.model(data)
-        return result
-
     def build_training_data_loader(self) -> DataLoader:
         train_set = datasets.MNIST(
             self.download_directory,

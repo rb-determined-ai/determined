@@ -10,7 +10,7 @@ import time
 import warnings
 from abc import abstractmethod
 from inspect import signature
-from typing import Any, Callable, Dict, Iterator, Optional, Type, Union, cast, Tuple, List
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Type, Union, cast
 
 import numpy as np
 import torch
@@ -21,9 +21,7 @@ from determined import core, pytorch, tensorboard, util
 from determined.common import check
 from determined.core import SearcherOperation
 from determined.horovod import hvd
-from determined.profiler import ProfilerAgent, DummyProfilerAgent
-from determined.tensorboard.util import get_rank_aware_path
-from determined.util import has_param
+from determined.profiler import DummyProfilerAgent, ProfilerAgent
 
 # Apex is included only for GPU trials.
 try:
@@ -34,7 +32,7 @@ except ImportError:  # pragma: no cover
 
 
 class TrainUnit:
-    def __init__(self, value):
+    def __init__(self, value: int):
         self.value = value
 
     @staticmethod
@@ -49,9 +47,9 @@ class TrainUnit:
             raise ValueError(f"unrecognized searcher unit {unit}")
 
     @staticmethod
-    def _from_values(batches: Optional[int] = None,
-                     records: Optional[int] = None,
-                     epochs: Optional[int] = None):
+    def _from_values(
+        batches: Optional[int] = None, records: Optional[int] = None, epochs: Optional[int] = None
+    ):
         if sum((batches is not None, records is not None, epochs is not None)) != 1:
             raise ValueError(f"invalid length: batches={batches} records={records} epochs={epochs}")
         if batches:
@@ -89,9 +87,9 @@ class _TrainStepType(enum.Enum):
 
 # XXX: should this be private? will be returned from .train() but is only used internally
 class _TrainStep:
-    def __init__(self, train_step_type: _TrainStepType, train_unit: TrainUnit):
-        self.step_type = train_step_type
-        self.unit = train_unit
+    def __init__(self, step_type: _TrainStepType, unit: TrainUnit):
+        self.step_type = step_type
+        self.unit = unit
         self.limit_reached = False
 
 
@@ -127,7 +125,8 @@ class TrialState:
 
 class PyTorchTrialController:
     def __init__(
-        self, trial_inst: det.Trial,
+        self,
+        trial_inst: det.Trial,
         context: pytorch.PyTorchTrialContext,
         min_checkpoint_period: TrainUnit,
         min_validation_period: TrainUnit,
@@ -150,9 +149,9 @@ class PyTorchTrialController:
             raise TypeError("PyTorchTrialController requires a PyTorchTrial.")
         self._trial = trial_inst
         self._context = context
-        self.core_context = self._context._core
-        self.prof = det_profiler
-        self._context._set_determined_profiler(self.prof)
+        self._core_context = self._context._core
+        self._prof = det_profiler
+        self._context._set_determined_profiler(self._prof)
 
         self._local_training = local_training
 
@@ -173,12 +172,11 @@ class PyTorchTrialController:
             self._trial_id = 0
             assert self._max_length, "max_length must be specified for local-training mode"
         else:
-            self._trial_id = self.core_context.train._trial_id
+            self._trial_id = self._core_context.train._trial_id
 
-        self._state = TrialState(trial_id=self._trial_id,
-                                 batches_trained=steps_completed)
+        self._state = TrialState(trial_id=self._trial_id, batches_trained=steps_completed)
         self._start_from_batch = steps_completed
-        self._val_from_previous_run = self.core_context.train._get_last_validation()
+        self._val_from_previous_run = self._core_context.train._get_last_validation()
 
         # Training configs
         self._latest_checkpoint = latest_checkpoint
@@ -190,7 +188,7 @@ class PyTorchTrialController:
         self._global_batch_size = self._context.get_global_batch_size()
 
         if torch.cuda.is_available():
-            self.prof._set_sync_device(self._sync_device)
+            self._prof._set_sync_device(self._sync_device)
         self._callbacks = self._trial.build_callbacks()
         for callback in self._callbacks.values():
             if util.is_overridden(callback.on_checkpoint_end, pytorch.PyTorchCallback):
@@ -218,9 +216,7 @@ class PyTorchTrialController:
                 self._use_horovod or self._use_torch
             ), "Must use horovod or torch for distributed training"
         if context.distributed.size > 1 and not self._is_chief:
-            log_level = (
-                logging.DEBUG if debug else logging.WARNING
-            )
+            log_level = logging.DEBUG if debug else logging.WARNING
             logging.getLogger().setLevel(log_level)
         self._metric_writer = self._create_metric_writer()
 
@@ -252,9 +248,9 @@ class PyTorchTrialController:
         cls._set_random_seeds(trial_seed)
 
     def _upload_tb_files(self) -> None:
-        self.core_context.train.upload_tensorboard_files(
+        self._core_context.train.upload_tensorboard_files(
             (lambda _: True) if self._is_chief else (lambda p: not p.match("*tfevents*")),
-            get_rank_aware_path,
+            tensorboard.util.get_rank_aware_path,
         )
 
     @staticmethod
@@ -273,7 +269,7 @@ class PyTorchTrialController:
     def _report_training_metrics(self, training_metrics: List[Dict]):
         # Aggregate and reduce training metrics from all the training processes.
         if self._context.distributed.size > 1 and self._average_training_metrics:
-            with self.prof.record_timing("average_training_metrics"):
+            with self._prof.record_timing("average_training_metrics"):
                 batch_metrics = pytorch._combine_and_average_training_metrics(
                     self._context.distributed, training_metrics
                 )
@@ -284,7 +280,7 @@ class PyTorchTrialController:
 
         # Ignore batch_metrics entirely for custom reducers; there's no guarantee that per-batch
         # metrics are even logical for a custom reducer.
-        with self.prof.record_timing("reduce_metrics"):
+        with self._prof.record_timing("reduce_metrics"):
             metrics["avg_metrics"].update(
                 pytorch._convert_metrics_to_numpy(self._context.reduce_metrics(for_training=True))
             )
@@ -307,8 +303,10 @@ class PyTorchTrialController:
                 avg_metrics,
                 batch_metrics,
             )
-            self.core_context.train.report_training_metrics(
-                steps_completed=self._state.batches_trained, metrics=avg_metrics, batch_metrics=batch_metrics
+            self._core_context.train.report_training_metrics(
+                steps_completed=self._state.batches_trained,
+                metrics=avg_metrics,
+                batch_metrics=batch_metrics,
             )
 
         self._context.reset_reducers()
@@ -321,7 +319,7 @@ class PyTorchTrialController:
 
     def _on_epoch_start(self, epoch_idx: int):
         for callback in self._callbacks.values():
-            with self.prof.record_timing(
+            with self._prof.record_timing(
                 f"callbacks.{callback.__class__.__name__}.on_training_epoch_start"
             ):
                 sig = signature(callback.on_training_epoch_start)
@@ -336,16 +334,13 @@ class PyTorchTrialController:
 
     def _on_epoch_end(self, epoch_idx: int):
         for callback in self._callbacks.values():
-            with self.prof.record_timing(
+            with self._prof.record_timing(
                 f"callbacks.{callback.__class__.__name__}.on_training_epoch_end"
             ):
                 callback.on_training_epoch_end(epoch_idx)
 
     def _checkpoint(self, already_exiting: bool):
-        if self._state.last_ckpt == self._state.batches_trained:
-            return
-
-        self.core_context.train.set_status("checkpointing")
+        self._core_context.train.set_status("checkpointing")
         self._state.last_ckpt = self._state.batches_trained
 
         uuid = ""
@@ -367,7 +362,7 @@ class PyTorchTrialController:
             for callback in self._callbacks.values():
                 callback.on_checkpoint_upload_end(uuid=uuid)
         except det.InvalidHP:
-            self.core_context.train.report_early_exit(core.EarlyExitReason.INVALID_HP)
+            self._core_context.train.report_early_exit(core.EarlyExitReason.INVALID_HP)
             if not already_exiting:
                 raise ShouldExit(skip_exit_checkpoint=True)
 
@@ -463,8 +458,8 @@ class PyTorchTrialController:
             self._on_epoch_end(self._state.epochs_trained)
 
     def _stop_requested(self):
-        if self.core_context.distributed.rank == 0:
-            if self.core_context.preempt.should_preempt():
+        if self._core_context.distributed.rank == 0:
+            if self._core_context.preempt.should_preempt():
                 raise ShouldExit()
         if self._context.get_stop_requested():
             raise ShouldExit()
@@ -481,13 +476,17 @@ class PyTorchTrialController:
         # State always persists checkpoint step in batches
         return self._state.last_ckpt == self._state.batches_trained
 
+    def _validation_is_current(self) -> bool:
+        # State always persists validation step in batches
+        return self._state.last_val == self._state.batches_trained
+
     def _steps_until_complete(self, train_unit: TrainUnit):
         if isinstance(train_unit, Batch):
-            return self._state.batches_trained - train_unit.value
+            return train_unit.value - self._state.batches_trained
         elif isinstance(train_unit, Epoch):
-            return self._state.epochs_trained - train_unit.value
+            return train_unit.value - self._state.epochs_trained
         elif isinstance(train_unit, Record):
-            return (self._state.batches_trained * self._global_batch_size) - train_unit.value
+            return train_unit.value - (self._state.batches_trained * self._global_batch_size)
 
     def run(self):
         @contextlib.contextmanager
@@ -501,12 +500,12 @@ class PyTorchTrialController:
         # don't bind the loop iteration variable `callback`, which would likely cause us to call
         # on_trial_shutdown() multiple times for the final callback, and not at all for the others.
         def on_shutdown(callback_name: str, on_trial_shutdown: Callable) -> None:
-            with self.prof.record_timing(f"callbacks.{callback_name}.on_trial_shutdown"):
+            with self._prof.record_timing(f"callbacks.{callback_name}.on_trial_shutdown"):
                 on_trial_shutdown()
 
         with contextlib.ExitStack() as exit_stack:
             for callback in self._callbacks.values():
-                with self.prof.record_timing(
+                with self._prof.record_timing(
                     f"callbacks.{callback.__class__.__name__}.on_trial_startup"
                 ):
                     callback.on_trial_startup(self._state.batches_trained, self._latest_checkpoint)
@@ -548,42 +547,65 @@ class PyTorchTrialController:
                 for optimizer in self._context.optimizers:
                     hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
-            exit_stack.enter_context(self.prof)
+            exit_stack.enter_context(self._prof)
             for callback in self._callbacks.values():
-                with self.prof.record_timing(
+                with self._prof.record_timing(
                     f"callbacks.{callback.__class__.__name__}.on_training_start"
                 ):
                     callback.on_training_start()
 
             if self._local_training:
-                self._train_for_local()
+                self._train_for_local(
+                    training_enumerator=self.training_enumerator,
+                    train_steps=[
+                        _TrainStep(step_type=_TrainStepType.TRAIN, unit=self._max_length),
+                        _TrainStep(
+                            step_type=_TrainStepType.CHECKPOINT, unit=self._min_checkpoint_period
+                        ),
+                        # Scheduling unit is always configured in batches
+                        _TrainStep(
+                            step_type=_TrainStepType.REPORT, unit=Batch(self._scheduling_unit)
+                        ),
+                        _TrainStep(
+                            step_type=_TrainStepType.VALIDATE, unit=self._min_validation_period
+                        ),
+                    ],
+                )
                 return
 
-            searcher_unit = self.core_context.searcher.get_configured_units()
-            for op in self.core_context.searcher.operations():
-                self._train_for_op(op, searcher_unit)
-
-    @staticmethod
-    def _generate_train_steps(
-        max_length: TrainUnit,
-        min_checkpoint_period: TrainUnit,
-        min_validation_period: TrainUnit,
-        reporting_period: TrainUnit
-    ):
-        return [
-            _TrainStep(train_step_type=_TrainStepType.TRAIN, train_unit=max_length),
-            _TrainStep(train_step_type=_TrainStepType.CHECKPOINT, train_unit=min_checkpoint_period),
-            _TrainStep(train_step_type=_TrainStepType.REPORT, train_unit=reporting_period),
-            _TrainStep(train_step_type=_TrainStepType.VALIDATE, train_unit=min_validation_period)
-        ]
+            searcher_unit = self._core_context.searcher.get_configured_units()
+            for op in self._core_context.searcher.operations():
+                self._train_for_op(
+                    op=op,
+                    searcher_unit=searcher_unit,
+                    train_steps=[
+                        _TrainStep(
+                            step_type=_TrainStepType.TRAIN,
+                            unit=TrainUnit._from_searcher_unit(op.length, searcher_unit),
+                        ),
+                        _TrainStep(
+                            step_type=_TrainStepType.CHECKPOINT, unit=self._min_checkpoint_period
+                        ),
+                        # Scheduling unit is always configured in batches
+                        _TrainStep(
+                            step_type=_TrainStepType.REPORT, unit=Batch(self._scheduling_unit)
+                        ),
+                        _TrainStep(
+                            step_type=_TrainStepType.VALIDATE, unit=self._min_validation_period
+                        ),
+                    ],
+                )
 
     # XXX: maybe/probably better if train_steps is passed in individually instead of as a list
     # XXX: return only the reached limits instead of all passed in steps?
-    def _train_with_steps(self, training_enumerator: iter, train_steps: List[_TrainStep]) -> Tuple[List[_TrainStep], List]:
+    # XXX: maybe train_with shouldn't take in the iterator since it needs to be created on trial start anyway
+    def _train_with_steps(
+        self, training_enumerator: iter, train_steps: List[_TrainStep]
+    ) -> Tuple[List[_TrainStep], List]:
         training_metrics = []
 
         # Start of train step: tell core API and set model mode
-        self.core_context.train.set_status("training")
+        self._core_context.train.set_status("training")
         for model in self._context.models:
             model.train()
 
@@ -609,20 +631,14 @@ class PyTorchTrialController:
 
         # True epoch end
 
-    def _train_for_local(self):
+    def _train_for_local(
+        self, train_steps: List[_TrainStep], training_enumerator: iter
+    ) -> Dict[str, Any]:
+        result = {}
         max_length_reached = False
 
         while not max_length_reached:
-            train_steps = self._generate_train_steps(
-                max_length=self._max_length,
-                min_validation_period=self._min_validation_period,
-                min_checkpoint_period=self._min_checkpoint_period,
-                # Scheduling unit is always configured in batches
-                reporting_period=Batch(self._scheduling_unit),
-            )
-
-            train_steps, training_metrics = self._train_with_steps(self.training_enumerator, train_steps)
-
+            train_steps, training_metrics = self._train_with_steps(training_enumerator, train_steps)
             self._report_training_metrics(training_metrics)
 
             for train_step in train_steps:
@@ -634,45 +650,73 @@ class PyTorchTrialController:
                     continue
 
                 if train_step.step_type == _TrainStepType.VALIDATE:
-                    val_metrics = self._validate()
+                    if self._validation_is_current():
+                        logging.debug("Validation already exists for step, skipping.")
+                    else:
+                        val_metrics = self._validate()
 
-                    # Validation step complete.
-                    # Report metrics to searcher API
-                    # Report metrics to core API
-                    # Checkpoint
-                    self.core_context.train.report_validation_metrics(self._state.batches_trained, val_metrics)
+                        # Validation step complete.
+                        # Report metrics to searcher API
+                        # Report metrics to core API
+                        # Checkpoint
+                        self._core_context.train.report_validation_metrics(
+                            self._state.batches_trained, val_metrics
+                        )
 
+                        if not self._checkpoint_is_current():
+                            self._checkpoint(already_exiting=False)
+
+                elif train_step.step_type == _TrainStepType.CHECKPOINT:
                     if not self._checkpoint_is_current():
                         self._checkpoint(already_exiting=False)
 
-                elif train_step.step_type == _TrainStepType.CHECKPOINT:
-                    self._checkpoint(already_exiting=False)
+                # Reset train step limit
+                train_step.limit_reached = False
 
                 # After checkpoint/validation steps, check preemption and upload to tensorboard
                 self._upload_tb_files()
                 self._stop_requested()
+        return result
 
-    def _train_for_op(self, op: SearcherOperation, searcher_unit: core.Unit):
-        searcher_completed = op._completed
-        searcher_length = TrainUnit._from_searcher_unit(op.length, searcher_unit)
+    def _validate_for_op(self, op: SearcherOperation, searcher_length: TrainUnit):
+        val_metrics = self._validate()
 
-        while not searcher_completed:
-            train_steps = self._generate_train_steps(
-                max_length=searcher_length,
-                min_validation_period=self._min_validation_period,
-                min_checkpoint_period=self._min_checkpoint_period,
-                # Scheduling unit is always configured in batches
-                reporting_period=Batch(self._scheduling_unit),
+        # Validation step complete. Chief must:
+        # Report metrics to searcher API
+        # Report metrics to core API
+        # Checkpoint if policy dictates
+        if self._is_chief:
+            searcher_metric = self._validate_searcher_metric(val_metrics)
+            if self._steps_until_complete(searcher_length) < 1:
+                op.report_completed(searcher_metric)
+
+            if self._ckpt_policy == "best" and not self._checkpoint_is_current():
+                best_validation_before = self._core_context.train.get_experiment_best_validation()
+
+            self._core_context.train.report_validation_metrics(
+                self._state.batches_trained, val_metrics
             )
 
-            train_steps, training_metrics = self._train_with_steps(self.training_iterator, train_steps)
+            if not self._checkpoint_is_current():
+                if self._ckpt_policy == "all" or (
+                    self._ckpt_policy == "best"
+                    and self._is_best_validation(now=searcher_metric, before=best_validation_before)
+                ):
+                    self._checkpoint(already_exiting=False)
+
+    def _train_for_op(
+        self, op: SearcherOperation, searcher_unit: core.Unit, train_steps: List[_TrainStep]
+    ):
+        searcher_length = TrainUnit._from_searcher_unit(op.length, searcher_unit)
+
+        while self._steps_until_complete(searcher_length) > 0:
+            train_steps, training_metrics = self._train_with_steps(
+                self.training_enumerator, train_steps
+            )
 
             self._report_training_metrics(training_metrics)
 
             for train_step in train_steps:
-                # Check searcher step status to determine whether to keep training
-                if train_step.step_type == _TrainStepType.SEARCHER:
-                    searcher_completed = train_step.limit_reached
                 if not train_step.limit_reached:
                     continue
 
@@ -683,38 +727,26 @@ class PyTorchTrialController:
                     self._report_searcher_progress(op, searcher_unit)
 
                 if train_step.step_type == _TrainStepType.VALIDATE:
-                    val_metrics = self._validate()
-
-                    # Validation step complete. Chief must:
-                    # Report metrics to searcher API
-                    # Report metrics to core API
-                    # Checkpoint if policy dictates
-                    if not self._is_chief:
-                        continue
-
-                    searcher_metric = self._validate_searcher_metric(val_metrics)
-                    if self._steps_until_complete(searcher_length) < 1:
-                        op.report_completed(searcher_metric)
-
-                    if self._ckpt_policy == "best" and not self._checkpoint_is_current():
-                        best_validation_before = self.core_context.train.get_experiment_best_validation()
-
-                    self.core_context.train.report_validation_metrics(self._state.batches_trained, val_metrics)
-
-                    if not self._checkpoint_is_current():
-                        if self._ckpt_policy == "all" or (
-                            self._ckpt_policy == "best" and
-                            self._is_best_validation(now=searcher_metric, before=best_validation_before)
-
-                        ):
-                            self._checkpoint(already_exiting=False)
+                    if not self._validation_is_current():
+                        self._validate_for_op(op, searcher_length)
 
                 elif train_step.step_type == _TrainStepType.CHECKPOINT:
-                    self._checkpoint(already_exiting=False)
+                    if not self._checkpoint_is_current():
+                        self._checkpoint(already_exiting=False)
+
+                # Reset train step limit
+                train_step.limit_reached = False
 
                 # After checkpoint/validation steps, check preemption and upload to tensorboard
                 self._upload_tb_files()
                 self._stop_requested()
+
+        # Finished training for op. Perform final checkpoint/validation if necessary.
+        if not self._checkpoint_is_current():
+            self._checkpoint(already_exiting=False)
+
+        if not self._validation_is_current():
+            self._validate_for_op(op, searcher_length)
 
         if self._is_chief:
             assert op._completed, "logic error; op was never completed"
@@ -773,20 +805,20 @@ class PyTorchTrialController:
             return False
         return self._context._should_communicate_and_update()  # type: ignore
 
-    def _train_batch(self, batch, epoch_idx, batch_idx):
+    def _train_batch(self, batch: pytorch.TorchData, epoch_idx: int, batch_idx: int):
         # Set the batch index on the trial context used by step_optimizer
         self._context._current_batch_idx = batch_idx
 
         # Initialize profiler
         batch_start_time = time.time()
-        self.prof.update_batch_idx(batch_idx)
+        self._prof.update_batch_idx(batch_idx)
 
         if self._context.experimental._auto_to_device:
-            with self.prof.record_timing("to_device", accumulate=True):
+            with self._prof.record_timing("to_device", accumulate=True):
                 batch = self._context.to_device(batch)
 
         with contextlib.ExitStack() as exit_stack:
-            exit_stack.enter_context(self.prof.record_timing("train_batch", requires_sync=False))
+            exit_stack.enter_context(self._prof.record_timing("train_batch", requires_sync=False))
             if self._context.profiler:
                 exit_stack.enter_context(self._context.profiler)
 
@@ -812,11 +844,11 @@ class PyTorchTrialController:
             training_metrics = {"loss": training_metrics}
 
         # Step learning rate of a pytorch.LRScheduler.
-        with self.prof.record_timing("step_lr_schedulers"):
+        with self._prof.record_timing("step_lr_schedulers"):
             for lr_scheduler in self._context.lr_schedulers:
                 self._auto_step_lr_scheduler_per_batch(batch_idx, lr_scheduler)
 
-        with self.prof.record_timing("from_device"):
+        with self._prof.record_timing("from_device"):
             for name, metric in training_metrics.items():
                 # Convert PyTorch metric values to NumPy, so that
                 # `det.util.encode_json` handles them properly without
@@ -828,7 +860,7 @@ class PyTorchTrialController:
         batch_dur = time.time() - batch_start_time
         samples_per_second = self._trial.get_batch_length(batch) / batch_dur
         samples_per_second *= self._context.distributed.size
-        self.prof.record_metric("samples_per_second", samples_per_second)
+        self._prof.record_metric("samples_per_second", samples_per_second)
 
         check.is_instance(
             training_metrics,
@@ -841,12 +873,9 @@ class PyTorchTrialController:
 
     @torch.no_grad()  # type: ignore
     def _validate(self):
-        if self._state.last_val == self._state.batches_trained:
-            return
-
         # Report a validation step is starting.
         if self._is_chief:
-            self.core_context.train.set_status("validating")
+            self._core_context.train.set_status("validating")
 
         self._context.reset_reducers()
 
@@ -882,11 +911,11 @@ class PyTorchTrialController:
                 callback.on_validation_epoch_start()
             for idx, batch in enumerate(self.validation_loader):
                 if self._context.experimental._auto_to_device:
-                    with self.prof.record_timing("to_device", accumulate=True):
+                    with self._prof.record_timing("to_device", accumulate=True):
                         batch = self._context.to_device(batch)
                 num_inputs += self._trial.get_batch_length(batch)
 
-                if has_param(self._trial.evaluate_batch, "batch_idx", 2):
+                if util.has_param(self._trial.evaluate_batch, "batch_idx", 2):
                     vld_metrics = self._trial.evaluate_batch(batch=batch, batch_idx=idx)
                 else:
                     vld_metrics = self._trial.evaluate_batch(batch=batch)  # type: ignore
@@ -1187,7 +1216,9 @@ class PyTorchTrialController:
             "lr_schedulers_state_dict": [
                 lr_scheduler.state_dict() for lr_scheduler in self._context.lr_schedulers
             ],
-            "callbacks": {name: callback.state_dict() for name, callback in self._callbacks.items()},
+            "callbacks": {
+                name: callback.state_dict() for name, callback in self._callbacks.items()
+            },
             "rng_state": rng_state,
         }
 
@@ -1446,7 +1477,6 @@ class PyTorchTrial(det.Trial):
 
     def predict_batch(self, batch: pytorch.TorchData) -> Dict[str, Any]:
         pass
-
 
     def evaluation_reducer(self) -> Union[pytorch.Reducer, Dict[str, pytorch.Reducer]]:
         """

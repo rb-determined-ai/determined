@@ -10,7 +10,7 @@ from tensorflow.keras import utils as keras_utils
 
 import determined as det
 from determined import core, gpu, keras, workload
-from determined.pytorch import PyTorchTrialController, PyTorchTrialContext, PyTorchTrial, Batch
+from determined.pytorch import Batch, PyTorchTrial, PyTorchTrialContext, PyTorchTrialController
 
 
 class TrainAndValidate:
@@ -118,12 +118,8 @@ def make_default_exp_config(
         "searcher": {
             "metric": searcher_metric,
         },
-        "min_checkpoint_period": {
-            "batches": 0
-        },
-        "min_validation_period": {
-            "batches": 0
-        }
+        "min_checkpoint_period": {"batches": 0},
+        "min_validation_period": {"batches": 0},
     }
 
 
@@ -439,7 +435,5 @@ def ensure_requires_global_batch_size(
     # Catch missing global_batch_size.
     with pytest.raises(det.errors.InvalidExperimentException, match="is a required hyperparameter"):
         _ = make_trial_controller_from_trial_implementation(
-            trial_class,
-            workloads=make_workloads(),
-            hparams=bad_hparams
+            trial_class, workloads=make_workloads(), hparams=bad_hparams
         )

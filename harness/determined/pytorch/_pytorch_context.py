@@ -33,16 +33,17 @@ except ImportError:  # pragma: no cover
         logging.warning("PyTorch AMP is unavailable.")
     pass
 
+
 class TrialState:
     def __init__(
-            self,
-            trial_id: int,
-            last_ckpt: int = 0,
-            steps_completed: int = 0,
-            step_id: int = 0,
-            last_val: int = 0,
-            batches_trained: int = None,
-            epochs_trained: int = None,
+        self,
+        trial_id: int,
+        last_ckpt: int = 0,
+        steps_completed: int = 0,
+        step_id: int = 0,
+        last_val: int = 0,
+        batches_trained: int = None,
+        epochs_trained: int = None,
     ) -> None:
         # Store TrialID to distinguish between e.g. pause/restart and continue training.
         self.trial_id = trial_id
@@ -52,6 +53,7 @@ class TrialState:
         self.last_val = last_val
         self.batches_trained = batches_trained
         self.epochs_trained = epochs_trained
+
 
 class PyTorchTrialContext(pytorch._PyTorchReducerContext):
     """Contains runtime information for any Determined workflow that uses the ``PyTorch`` API.
@@ -70,18 +72,19 @@ class PyTorchTrialContext(pytorch._PyTorchReducerContext):
        the runtime information and properly handling training data in distributed training.
     """
 
-    def __init__(self,
-                 core_context: det.core.Context,
-                 trial_seed: int,
-                 hparams: Optional[Dict] = None,
-                 slots_per_trial: Optional[int] = 0,
-                 num_gpus: Optional[int] = 0,
-                 exp_conf: Optional[Dict] = None,
-                 aggregation_frequency: Optional[int] = 1,
-                 fp16_compression: Optional[bool] = False,
-                 average_aggregated_gradients: Optional[bool] = False,
-                 steps_completed: Optional[int] = 0,
-                 ) -> None:
+    def __init__(
+        self,
+        core_context: det.core.Context,
+        trial_seed: int,
+        hparams: Optional[Dict] = None,
+        slots_per_trial: Optional[int] = 0,
+        num_gpus: Optional[int] = 0,
+        exp_conf: Optional[Dict] = None,
+        aggregation_frequency: Optional[int] = 1,
+        fp16_compression: Optional[bool] = False,
+        average_aggregated_gradients: Optional[bool] = False,
+        steps_completed: Optional[int] = 0,
+    ) -> None:
         self._core = core_context
         self.distributed = self._core.distributed
         pytorch._PyTorchReducerContext.__init__(self, self.distributed.allgather)

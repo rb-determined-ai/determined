@@ -1,12 +1,12 @@
 import json
 import logging
 import pathlib
-from typing import Any, cast, Dict, Tuple, Type
+from typing import Any, Dict, Tuple, Type, cast
 
 import torch
 
 import determined as det
-from determined import errors, pytorch, util, load
+from determined import errors, load, pytorch, util
 
 
 def load_trial_from_checkpoint_path(path: str, **kwargs: Any) -> pytorch.PyTorchTrial:
@@ -137,10 +137,14 @@ def _load_pytorch_trial_for_checkpoint_export(
             slots_per_trial=env.experiment_config.slots_per_trial(),
             num_gpus=len(env.container_gpus),
             exp_conf=env.experiment_config,
-            aggregation_frequency=env.experiment_config.get_optimizations_config().get("aggregation_frequency"),
-            fp16_compression=env.experiment_config.get_optimizations_config().get("gradient_compression"),
+            aggregation_frequency=env.experiment_config.get_optimizations_config().get(
+                "aggregation_frequency"
+            ),
+            fp16_compression=env.experiment_config.get_optimizations_config().get(
+                "gradient_compression"
+            ),
             average_aggregated_gradients=env.experiment_config.average_training_metrics_enabled(),
-            steps_completed=env.steps_completed
+            steps_completed=env.steps_completed,
         )
 
     return trial_class, trial_context
