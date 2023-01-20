@@ -20,6 +20,10 @@ def merge_dict(d1: Dict, d2: Dict) -> None:
     """
 
     for k, v2 in d2.items():
+        # Nones represent a deletion
+        if v2 is None:
+            d1.pop(k)
+            continue
         v1 = d1.get(k)
         if isinstance(v1, dict) and isinstance(v2, dict):
             merge_dict(v1, v2)
@@ -41,6 +45,8 @@ def to_lower_camel_case(snake_str):
 def clean(path: str, patch: str) -> None:
     with open(path, "r") as f:
         spec = json.load(f)
+
+    # del spec["definitions"]["v1CompleteValidateAfterOperation"]["properties"]["metrics"]["type"]
 
     for key, value in spec["definitions"].items():
         # Remove definitions that should be hidden from the user.

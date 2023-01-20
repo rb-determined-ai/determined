@@ -1614,13 +1614,13 @@ class v1CompareTrialsResponse:
         return out
 
 class v1CompleteValidateAfterOperation:
-    metrics: "typing.Optional[typing.Dict[str, typing.Any]]" = None
+    metrics: "typing.Optional[typing.Any]" = None
     op: "typing.Optional[v1ValidateAfterOperation]" = None
 
     def __init__(
         self,
         *,
-        metrics: "typing.Union[typing.Dict[str, typing.Any], None, Unset]" = _unset,
+        metrics: "typing.Union[typing.Any, None, Unset]" = _unset,
         op: "typing.Union[v1ValidateAfterOperation, None, Unset]" = _unset,
     ):
         if not isinstance(metrics, Unset):
@@ -11462,7 +11462,7 @@ class v1ValidationCompleted:
     def __init__(
         self,
         *,
-        metrics: "typing.Dict[str, typing.Any]",
+        metrics: typing.Any,
         requestId: str,
         validateAfterLength: str,
     ):
