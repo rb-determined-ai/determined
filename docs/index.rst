@@ -86,9 +86,9 @@
    </tr>
    </table>
 
-##########################
- *Welcome to Determined!*
-##########################
+##############################
+ *Welcome to Determined, Yo!*
+##############################
 
 You can quickly train almost any deep learning model using Determined.
 
