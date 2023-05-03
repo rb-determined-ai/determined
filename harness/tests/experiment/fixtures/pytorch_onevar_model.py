@@ -336,9 +336,7 @@ class OneVarAMPBaseTrial(OneVarTrial):
 
     def __init__(self, context: pytorch.PyTorchTrialContext):
         super().__init__(context)
-        self._agg_freq = self.context.env.experiment_config.get_optimizations_config()[
-            "aggregation_frequency"
-        ]
+        self._agg_freq = context._aggregation_frequency
 
     def build_training_data_loader(self) -> torch.utils.data.DataLoader:
         return pytorch.DataLoader(
@@ -427,6 +425,7 @@ class OneVarManualAMPTrial(OneVarAMPBaseTrial):
 
         scaled_loss = self.scaler.scale(loss)
         self.context.backward(scaled_loss)
+        print("stepping optimizer?")
         self.context.step_optimizer(self.opt, scaler=self.scaler)
         if (batch_idx + 1) % self._agg_freq == 0:
             self.scaler.update()

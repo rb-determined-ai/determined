@@ -743,18 +743,13 @@ class TestPyTorchTrial:
         hparams = dict(self.hparams)
         hparams["global_batch_size"] = 1
 
-        AGG_FREQ = 2
         exp_config = utils.make_default_exp_config(
             hparams,
             scheduling_unit=1,
             searcher_metric=trial_class._searcher_metric,
         )
-        exp_config["optimizations"].update(
-            {
-                "aggregation_frequency": AGG_FREQ,
-                "average_aggregated_gradients": True,
-            }
-        )
+
+        aggregation_frequency = 2
 
         trial, trial_controller = create_trial_and_trial_controller(
             exp_config=exp_config,
@@ -762,16 +757,17 @@ class TestPyTorchTrial:
             hparams=hparams,
             trial_seed=self.trial_seed,
             expose_gpus=True,
-            max_batches=20 * AGG_FREQ,
+            max_batches=20 * aggregation_frequency,
             min_validation_batches=1,
             min_checkpoint_batches=sys.maxsize,
+            aggregation_frequency=aggregation_frequency,
         )
         trial_controller.run()
 
         metrics_callback = trial.metrics_callback
         training_metrics = metrics_callback.training_metrics
 
-        amp_metrics_test(trial_class, training_metrics, agg_freq=AGG_FREQ)
+        amp_metrics_test(trial_class, training_metrics, agg_freq=aggregation_frequency)
 
     def test_trainer(self) -> None:
         # Train for 100 batches, checkpoint and validate every 50 batches
@@ -996,7 +992,7 @@ def amp_metrics_test(trial_class, training_metrics, agg_freq=1):
             assert metrics["scale"] == scale, "scale is inconsistent between batches"
         else:
             metrics["scale"] = scale
-        loss = metrics["loss"].item()
+        loss = metrics["loss"]
         scale_before = metrics["scale_before"]
         scaled_loss = loss * scale_before
         scale = metrics["scale"]
@@ -1042,10 +1038,11 @@ def create_trial_and_trial_controller(
     checkpoint_dir: typing.Optional[str] = None,
     latest_checkpoint: typing.Optional[str] = None,
     steps_completed: int = 0,
-    expose_gpus: bool = False,
+    expose_gpus: bool = True,
     max_batches: int = 100,
     min_checkpoint_batches: int = sys.maxsize,
     min_validation_batches: int = sys.maxsize,
+    aggregation_frequency: int = 1,
 ) -> typing.Tuple[pytorch.PyTorchTrial, pytorch._PyTorchTrialController]:
     assert issubclass(
         trial_class, pytorch.PyTorchTrial
@@ -1080,9 +1077,9 @@ def create_trial_and_trial_controller(
             slots_per_trial=1,
             num_gpus=len(gpu_uuids),
             exp_conf=exp_config,
-            aggregation_frequency=1,
+            aggregation_frequency=aggregation_frequency,
             steps_completed=steps_completed,
-            managed_training=False,
+            managed_training=True,
             debug_enabled=False,
         )
         trial_context._set_default_gradient_compression(False)

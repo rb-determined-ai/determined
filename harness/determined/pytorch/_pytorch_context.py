@@ -657,6 +657,7 @@ class PyTorchTrialContext(pytorch._PyTorchReducerContext):
             return True
         if self._current_batch_idx is None:
             raise det.errors.InternalException("Training hasn't started.")
+        print("agg freq", self._aggregation_frequency)
         return (self._current_batch_idx + 1) % self._aggregation_frequency == 0
 
     def backward(
@@ -817,6 +818,7 @@ class PyTorchTrialContext(pytorch._PyTorchReducerContext):
 
         if not self._should_communicate_and_update():
             return
+        print("stepping optimizer!")
 
         # Communication needs to be synchronized so that is completed
         # before we apply gradient clipping and `step()`.
