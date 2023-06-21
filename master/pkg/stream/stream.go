@@ -232,6 +232,7 @@ type PublisherEvent[T any] struct {
 }
 
 type Subscriber[T any] struct {
+	Filter func(*Event[T]) bool
 	// Is this subscriber closed?  Set externally, Subscriber notices eventually.
 	Closed bool
 	// Is this subscriber still reading published messages?  Only when Stream finishes is this set.
@@ -243,6 +244,8 @@ type Subscriber[T any] struct {
 	Cond *sync.Cond
 	// Head is the head of a linked list of events.
 	Head *SubscriberEvent[T]
+	// Used by the publisher.
+	Checked uint64
 }
 
 type Publisher[T any] struct {
@@ -294,6 +297,22 @@ func AddSubscriber[T any](p *Publisher[T], sub *Subscriber[T]) (*SubscriberEvent
 	return sub.Head, p.NewestDeleted
 }
 
+func PreFilter[T any](sub *Subscriber[T], head *SubscriberEvent[T]) bool {
+	// prefilter to reduce wakeups
+	limit := sub.Checked
+	if sub.Head.Event.ID > limit {
+		limit = sub.Head.Event.ID
+	}
+	for ptr := head; ptr.Event.ID > limit; ptr = ptr.Next {
+		if sub.Filter(&ptr.Event) {
+			return true
+		}
+	}
+	// no wakeup, but don't revisit these nodes
+	sub.Checked = head.Event.ID
+	return false
+}
+
 // wake up subscribers, and give them a pointer to the new head of the list
 func Broadcast[T any](p *Publisher[T]) {
 	p.Lock.Lock()
@@ -306,7 +325,8 @@ func Broadcast[T any](p *Publisher[T]) {
 		sub := p.Subscribers[i]
 		if sub.DoneReading {
 			// replace this position with the final subscriber
-			p.Subscribers[i] = p.Subscribers[n-1]
+			p.Subscribers[i] = p.Subscribers[len(p.Subscribers)-1]
+			// shorten list
 			n--;
 			// leave i alone, we'll revisit this position
 			continue
@@ -317,18 +337,18 @@ func Broadcast[T any](p *Publisher[T]) {
 			lowestSeen = sub.Seen
 		}
 
-		// wake up subscriber with new Head.
-		func(){
-			sub.Cond.L.Lock()
-			defer sub.Cond.L.Unlock()
-			sub.Head = head
-			sub.Cond.Signal()
-		}()
+		// prefilter to reduce wakeups
+		if PreFilter(sub, head) {
+			// wake up subscriber with new Head.
+			func(){
+				sub.Cond.L.Lock()
+				defer sub.Cond.L.Unlock()
+				sub.Head = head
+				sub.Cond.Signal()
+			}()
+		}
+
 		i++;
-	}
-	if n < len(p.Subscribers) {
-		// shorten list
-		p.Subscribers = p.Subscribers[:n]
 	}
 
 	// walk backwards through oldest events, and unlink any that are older than lowestSeen.
@@ -358,10 +378,10 @@ func Broadcast[T any](p *Publisher[T]) {
 	}
 }
 
-func NewSubscriber[T any]() *Subscriber[T] {
+func NewSubscriber[T any](filter func(*Event[T]) bool) *Subscriber[T] {
 	var lock sync.Mutex
 	cond := sync.NewCond(&lock)
-	return &Subscriber[T]{Cond: cond}
+	return &Subscriber[T]{Filter: filter, Cond: cond}
 }
 
 func CloseSubscriber[T any](sub *Subscriber[T]){

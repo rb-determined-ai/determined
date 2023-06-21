@@ -30,7 +30,7 @@ func EventGen(p *stream.Publisher[int]) {
 		now := time.Now()
 		next := last.Add(interval)
 		if next.After(now) {
-			time.Sleep(next.Sub(now))
+			// time.Sleep(next.Sub(now))
 			last = next
 		}else{
 			last = now
@@ -55,7 +55,7 @@ func EventGen(p *stream.Publisher[int]) {
 				now := time.Now()
 				reportWindow := float64(now.Sub(lastReportTime)) / float64(time.Second)
 				lastReportTime = now
-				println("events per second:", int(float64(nreported)/reportWindow), "events in queue:", n, "subscribers:", len(p.Subscribers))
+				println("events per second:", int(float64(nreported)/reportWindow), "events in queue:", n)
 			}()
 		}
 		stream.Broadcast(p)
@@ -67,9 +67,12 @@ func OneStreamer(p *stream.Publisher[int], id int) {
 	lifetime := avgLifetime + time.Duration(rand.NormFloat64() * float64(avgLifetime) / 4.0)
 	deadline := time.Now().Add(lifetime * time.Second)
 
-	sub := stream.NewSubscriber[int]()
-	defer stream.CloseSubscriber(sub)
+	filter := func(ev *stream.Event[int]) bool {
+		return id % eventRelevanceDenom == ev.Msg
+	}
 
+	// XXX confusing defers here
+	sub := stream.NewSubscriber[int](filter)
 	msgs := make(chan *stream.Event[int], 2)
 	go stream.Stream(p, sub, 0, msgs);
 	defer func(){
@@ -87,10 +90,11 @@ func OneStreamer(p *stream.Publisher[int], id int) {
 		if !ok {
 			return
 		}
-		// check msg relevance
-		if msg.Msg % eventRelevanceDenom != id % eventRelevanceDenom {
-			continue
-		}
+		// streamer filters for useful content
+		_ = msg
+		// if !filter(msg) {
+		// 	continue
+		// }
 		// relevant message, spend some time writing it to a file
 		// time.Sleep(2 * time.Second / eventsPerSec)
 		// println(id, msg.Msg)
