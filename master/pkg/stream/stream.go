@@ -2,6 +2,7 @@ package stream
 
 import (
 	"sync"
+	"context"
 )
 
 // func LinkedAppend[T Linked](Linked head
@@ -391,18 +392,27 @@ func CloseSubscriber[T any](sub *Subscriber[T]){
 	sub.Cond.Signal()
 }
 
-func Stream[T any](p *Publisher[T], sub *Subscriber[T], since uint64, msgs chan *Event[T]) {
+func Stream[T any](
+	p *Publisher[T],
+	sub *Subscriber[T],
+	since uint64,
+	onEvent func(*Event[T]),
+	ctx context.Context,
+) {
+	go func(){
+		<-ctx.Done()
+		CloseSubscriber(sub)
+	}()
+
+	defer func(){
+		sub.DoneReading = true
+	}()
+
 	// if we were to do the SQL first, and base sub.Seen on that, we could connect to the publisher
 	// after a new message was already broadcast and deleted, and we would miss it.
 	// Subscribe to the publisher, and find out where it's stream starst.
 	// head, newestDeleted := AddSubscriber(p, sub)
 	head, _ := AddSubscriber(p, sub)
-
-	defer close(msgs)
-
-	defer func(){
-		sub.DoneReading = true
-	}()
 
 	if since < sub.Seen {
 		// // Get initial elements from the database.
@@ -425,11 +435,7 @@ func Stream[T any](p *Publisher[T], sub *Subscriber[T], since uint64, msgs chan 
 	for {
 		// process intial or additional events
 		for event := head; event.Event.ID > sub.Seen ; event = event.Next {
-			msgs <- &event.Event
-			// check if we're closed
-			if sub.Closed {
-				return
-			}
+			onEvent(&event.Event)
 		}
 		// done with events up to our head
 		if sub.Seen < head.Event.ID {

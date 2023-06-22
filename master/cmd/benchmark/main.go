@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"time"
 	"math/rand"
 
@@ -15,8 +16,9 @@ import (
 
 const nStreamers = 10000; // 10k streamers
 const avgLifetime = 120; // average streamer lifetime, 2m
-const eventsPerSec = 1000; // 1k events per second
+const eventsPerSec = 10000; // 1k events per second
 const eventRelevanceDenom = 10; // 1 of 10 events apply to each streamer
+const batchSize = 100;
 
 func EventGen(p *stream.Publisher[int]) {
 	const reportPeriod = eventsPerSec
@@ -25,12 +27,12 @@ func EventGen(p *stream.Publisher[int]) {
 	i := 0
 	last := time.Now()
 	lastReportTime := last
-	interval := time.Second / eventsPerSec
+	interval := time.Second / eventsPerSec * batchSize
 	for {
 		now := time.Now()
 		next := last.Add(interval)
 		if next.After(now) {
-			// time.Sleep(next.Sub(now))
+			time.Sleep(next.Sub(now))
 			last = next
 		}else{
 			last = now
@@ -38,9 +40,11 @@ func EventGen(p *stream.Publisher[int]) {
 		func(){
 			p.Lock.Lock()
 			defer p.Lock.Unlock()
-			stream.UpdateUnlocked(p, id, i)
-			i = (i + 1) % eventRelevanceDenom
-			id++
+			for n := 0; n < batchSize; n++ {
+				stream.UpdateUnlocked(p, id, i)
+				i = (i + 1) % eventRelevanceDenom
+				id++
+			}
 		}()
 		if id - lastReport > reportPeriod {
 			func(){
@@ -66,39 +70,18 @@ func OneStreamer(p *stream.Publisher[int], id int) {
 	// pick a random lifetime
 	lifetime := avgLifetime + time.Duration(rand.NormFloat64() * float64(avgLifetime) / 4.0)
 	deadline := time.Now().Add(lifetime * time.Second)
+	ctx, _ := context.WithDeadline(context.Background(), deadline)
 
 	filter := func(ev *stream.Event[int]) bool {
 		return id % eventRelevanceDenom == ev.Msg
 	}
-
-	// XXX confusing defers here
 	sub := stream.NewSubscriber[int](filter)
-	msgs := make(chan *stream.Event[int], 2)
-	go stream.Stream(p, sub, 0, msgs);
-	defer func(){
-		stream.CloseSubscriber(sub)
-		// drain msgs
-		for  {
-			if _, ok := <-msgs; !ok {
-				break
-			}
-		}
-	}()
 
-	for time.Now().Before(deadline) {
-		msg, ok := <-msgs
-		if !ok {
-			return
-		}
-		// streamer filters for useful content
-		_ = msg
-		// if !filter(msg) {
-		// 	continue
-		// }
-		// relevant message, spend some time writing it to a file
-		// time.Sleep(2 * time.Second / eventsPerSec)
-		// println(id, msg.Msg)
+	onEvent := func(ev *stream.Event[int]) {
+		// noop
 	}
+
+	stream.Stream(p, sub, 0, onEvent, ctx)
 }
 
 func Streamer(p *stream.Publisher[int], id int) {
