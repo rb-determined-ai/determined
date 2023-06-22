@@ -32,37 +32,30 @@ func EventGen(p *stream.Publisher[int]) {
 		now := time.Now()
 		next := last.Add(interval)
 		if next.After(now) {
-			time.Sleep(next.Sub(now))
+			// time.Sleep(next.Sub(now))
 			last = next
 		}else{
 			last = now
 		}
-		func(){
-			p.Lock.Lock()
-			defer p.Lock.Unlock()
-			for n := 0; n < batchSize; n++ {
-				stream.UpdateUnlocked(p, id, i)
-				i = (i + 1) % eventRelevanceDenom
-				id++
-			}
-		}()
+		// generate an event
+		var events []*stream.Event[int]
+		for n := 0; n < batchSize; n++ {
+			events = append(events, &stream.Event[int]{id, i})
+			i = (i + 1) % eventRelevanceDenom
+			id++
+		}
+		// broadcast events
+		stream.Broadcast(p, events)
 		if id - lastReport > reportPeriod {
 			func(){
-				p.Lock.Lock()
-				defer p.Lock.Unlock()
-				n := 0
-				for ev := &p.Head.SubscriberEvent; ev.Event.ID > 0; ev = ev.Next {
-					n++
-				}
 				nreported := id - lastReport
 				lastReport = id
 				now := time.Now()
 				reportWindow := float64(now.Sub(lastReportTime)) / float64(time.Second)
 				lastReportTime = now
-				println("events per second:", int(float64(nreported)/reportWindow), "events in queue:", n)
+				println("events per second:", int(float64(nreported)/reportWindow))
 			}()
 		}
-		stream.Broadcast(p)
 	}
 }
 
@@ -75,17 +68,15 @@ func OneStreamer(p *stream.Publisher[int], id int) {
 	filter := func(ev *stream.Event[int]) bool {
 		return id % eventRelevanceDenom == ev.Msg
 	}
-	sub := stream.NewSubscriber[int](filter)
 
-	onEvent := func(ev *stream.Event[int]) {
-		// noop
+	onEvents := func(evs []*stream.Event[int]) {
+		// presently a noop
 	}
 
-	stream.Stream(p, sub, 0, onEvent, ctx)
+	stream.Stream(p, 0, filter, onEvents, ctx)
 }
 
 func Streamer(p *stream.Publisher[int], id int) {
-
 	// watch the thundering herd
 	time.Sleep(2 * time.Second)
 
@@ -95,7 +86,7 @@ func Streamer(p *stream.Publisher[int], id int) {
 }
 
 func main() {
-	publisher := stream.NewPublisher[int]()
+	publisher := &stream.Publisher[int]{}
 	for i := 0; i < nStreamers; i++ {
 		go Streamer(publisher, i)
 	}

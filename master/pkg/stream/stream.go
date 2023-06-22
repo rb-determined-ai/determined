@@ -142,41 +142,6 @@ import (
 // 	Msg T
 // 	StreamAuth StreamAuth
 // }
-//
-// func Publish[T](p *Publisher[T], updates []Update[T]) {
-// 	// XXX: not sure how to reuse buf
-// 	buf := make([]T, len(updates))
-// 	i := 0
-// 	n := len(p.Subscribers)
-// 	for i < n {
-// 		sub := p.Subscribers[i]
-// 		if sub.Closed {
-// 			// replace this position with the final subscriber
-// 			p.Subscribers[i] = p.Subscribers[-1]
-// 			// shorten list
-// 			n--;
-// 			// leave i alone, we'll revisit this position
-// 			continue
-// 		}
-// 		// Gather messages this subscriber cares about.
-// 		l := 0
-// 		for _, update := range udpates {
-// 			if sub.Filter(update.Msg, update.StreamAuth) {
-// 				buf[l++] = update.Msg
-// 			}
-// 		}
-// 		if l > 0 {
-// 			// Pass messages and wake up subscriber.
-// 			func(){
-// 				sub.Cond.L.Lock()
-// 				defer sub.Cond.L.Unlock()
-// 				sub.Msgs = append(sub.Msgs, buf[:l]...)
-// 				sub.Cond.Signal()
-// 			}()
-// 		}
-// 		i++;
-// 	}
-// }
 
 // publisher keeps a linked list of data, streamers wake up and check list
 //
@@ -220,162 +185,78 @@ type Event[T any] struct {
 	// StreamAuth StreamAuth
 }
 
-// Subscribers have access to a singly-linked list.
-type SubscriberEvent[T any] struct {
-	Event Event[T]
-	Next *SubscriberEvent[T]
-}
-
-// Publisher maintains a doubly-linked list.
-type PublisherEvent[T any] struct {
-	SubscriberEvent SubscriberEvent[T]
-	Prev *PublisherEvent[T]
-}
-
 type Subscriber[T any] struct {
+	// filter is applied before a wakeup
 	Filter func(*Event[T]) bool
+	Cond *sync.Cond
+	Events []*Event[T]
 	// Is this subscriber closed?  Set externally, Subscriber notices eventually.
 	Closed bool
-	// Is this subscriber still reading published messages?  Only when Stream finishes is this set.
-	DoneReading bool
-	// What is the newest message this Subscriber has seen?
-	// The publisher will not delete messages newer than or equal to Seen.
-	// The subscriber will not peek at messages older than Seen.
-	Seen uint64
-	Cond *sync.Cond
-	// Head is the head of a linked list of events.
-	Head *SubscriberEvent[T]
-	// Used by the publisher.
-	Checked uint64
 }
 
 type Publisher[T any] struct {
 	Lock sync.Mutex
 	Subscribers []*Subscriber[T]
-	// Add to the head.
-	Head *PublisherEvent[T]
-	// Delete from the tail.  Note the Tail starts with a dummy event of Seen=0.
-	Tail *PublisherEvent[T]
-	// The most recent of deleted events.
-	NewestDeleted uint64
+	// The most recent published event (won't be published again)
+	NewestPublished uint64
 }
 
-func NewPublisher[T any]() *Publisher[T] {
-	sentinel := &PublisherEvent[T]{}
-	return &Publisher[T]{
-		Head: sentinel,
-		Tail: sentinel,
-	}
-}
-
-// add a msg to the publisher
-func UpdateUnlocked[T any](p *Publisher[T], ID uint64, msg T/*, streamAuth StreamAuth*/) {
-	publisherEvent := &PublisherEvent[T]{
-		SubscriberEvent: SubscriberEvent[T]{
-			Event: Event[T]{
-				ID: ID,
-				Msg: msg,
-				//StreamAuth: StreamAuth,
-			},
-			Next: &p.Head.SubscriberEvent,
-		},
-	}
-	p.Head.Prev = publisherEvent
-	p.Head = publisherEvent
-}
-
-// add a subscriber to the publisher, assign sub.Seen
-func AddSubscriber[T any](p *Publisher[T], sub *Subscriber[T]) (*SubscriberEvent[T], uint64) {
+// returns current NewestPublished
+func AddSubscriber[T any](p *Publisher[T], sub *Subscriber[T]) uint64 {
 	p.Lock.Lock()
 	defer p.Lock.Unlock()
 	p.Subscribers = append(p.Subscribers, sub)
-	sub.Head = &p.Head.SubscriberEvent
-
-	// Note that sub.Seen starts as zero, meaning new subs effectively preserve the current
-	// published list until they have a chance to see all of it (naturally).
-
-	// Return newestDeleted, so the sub knows what to query the database for.
-	return sub.Head, p.NewestDeleted
+	return p.NewestPublished
 }
 
-func PreFilter[T any](sub *Subscriber[T], head *SubscriberEvent[T]) bool {
-	// prefilter to reduce wakeups
-	limit := sub.Checked
-	if sub.Head.Event.ID > limit {
-		limit = sub.Head.Event.ID
-	}
-	for ptr := head; ptr.Event.ID > limit; ptr = ptr.Next {
-		if sub.Filter(&ptr.Event) {
-			return true
-		}
-	}
-	// no wakeup, but don't revisit these nodes
-	sub.Checked = head.Event.ID
-	return false
-}
+func Broadcast[T any](p *Publisher[T], events []*Event[T]) {
+	// XXX: not sure how to reuse buf
+	buf := make([]*Event[T], len(events))
 
-// wake up subscribers, and give them a pointer to the new head of the list
-func Broadcast[T any](p *Publisher[T]) {
 	p.Lock.Lock()
 	defer p.Lock.Unlock()
 	i := 0
 	n := len(p.Subscribers)
-	lowestSeen := ^uint64(0)
-	head := &p.Head.SubscriberEvent
 	for i < n {
 		sub := p.Subscribers[i]
-		if sub.DoneReading {
+		if sub.Closed {
 			// replace this position with the final subscriber
-			p.Subscribers[i] = p.Subscribers[len(p.Subscribers)-1]
-			// shorten list
+			p.Subscribers[i] = p.Subscribers[n-1]
 			n--;
 			// leave i alone, we'll revisit this position
 			continue
 		}
 
-		// keep track of lowestSeen
-		if sub.Seen < lowestSeen {
-			lowestSeen = sub.Seen
+		// Gather messages this subscriber cares about.
+		l := 0
+		for _, event := range events {
+			if sub.Filter(event/*, event.StreamAuth*/) {
+				buf[l] = event
+				l++
+			}
 		}
-
-		// prefilter to reduce wakeups
-		if PreFilter(sub, head) {
-			// wake up subscriber with new Head.
+		if l > 0 {
+			// Pass messages and wake up subscriber.
 			func(){
 				sub.Cond.L.Lock()
 				defer sub.Cond.L.Unlock()
-				sub.Head = head
+				sub.Events = append(sub.Events, buf[:l]...)
 				sub.Cond.Signal()
 			}()
 		}
 
 		i++;
 	}
-
-	// walk backwards through oldest events, and unlink any that are older than lowestSeen.
-	sentinel := p.Tail
-	oldest := sentinel.Prev
-	for oldest != nil && oldest.SubscriberEvent.Event.ID < lowestSeen {
-		temp := oldest.Prev
-		oldest.SubscriberEvent.Next = nil
-		oldest.Prev = nil
-		if oldest.SubscriberEvent.Event.ID > p.NewestDeleted {
-			p.NewestDeleted = oldest.SubscriberEvent.Event.ID
-		}
-		oldest = temp
+	if n < len(p.Subscribers) {
+		// shorten list
+		p.Subscribers = p.Subscribers[:n]
 	}
-	// did we empty the whole list?
-	if oldest == nil {
-		// Update p.Head to point to our sentinel at p.Tail.
-		//
-		// Note that Subscribers may still have a pointer to the old p.Head, so it won't be GC'd
-		// immediately, but those subscribers have already promised not to iterate past it by
-		// setting their sub.Seen values.
-		p.Head = sentinel
-	} else {
-		// new list tail is the oldest with ID >= lowestSeen
-		sentinel.Prev = oldest
-		sentinel.Prev.SubscriberEvent.Next = &sentinel.SubscriberEvent
+
+	// track our newest published message
+	for _, event := range events {
+		if event.ID > p.NewestPublished {
+			p.NewestPublished = event.ID
+		}
 	}
 }
 
@@ -394,27 +275,41 @@ func CloseSubscriber[T any](sub *Subscriber[T]){
 
 func Stream[T any](
 	p *Publisher[T],
-	sub *Subscriber[T],
 	since uint64,
-	onEvent func(*Event[T]),
+	filter func(*Event[T]) bool,
+	onEvents func([]*Event[T]),
 	ctx context.Context,
 ) {
+	sub := NewSubscriber(filter)
+
+	// We need a way to detect ctx.Done() and also a sync.Cond-based shutdown for this streamer,
+	// since the REST API endpoint uses a context (which is idiomatic and simple), but the publisher
+	// uses sync.Cond instead of channels (because the publisher must never block).
+	//
+	// One solution is to introduce an extra goroutine to receive Cond wakeups and send events over
+	// channels.  That introduces an extra context switch per event per websocket.
+	//
+	// A lighter weight solution is to use one goroutine per websocket to wait on the context and
+	// call trigger the Cond-based shutdown.  That solution requires an equal number of goroutines
+	// but only requires a context switch once over the whole lifetime of the websocket.
+	//
+	// An even lighter soultion would be to use one goroutine to watch all contexts (a dynamic
+	// number of them) using a hierarchical waiting scheme, like this one:
+	//
+	//     https://cyolo.io/blog/how-we-enabled-dynamic-channel-selection-at-scale-in-go/
+	//
+	// But that's probably not useful at our scale yet, and probably we should avoid
+	// one-goroutine-per websocket before we fight that battle anyway.
 	go func(){
 		<-ctx.Done()
 		CloseSubscriber(sub)
 	}()
 
-	defer func(){
-		sub.DoneReading = true
-	}()
+	newestPublished := AddSubscriber(p, sub)
 
-	// if we were to do the SQL first, and base sub.Seen on that, we could connect to the publisher
-	// after a new message was already broadcast and deleted, and we would miss it.
-	// Subscribe to the publisher, and find out where it's stream starst.
-	// head, newestDeleted := AddSubscriber(p, sub)
-	head, _ := AddSubscriber(p, sub)
+	var events []*Event[T]
 
-	if since < sub.Seen {
+	if since < newestPublished {
 		// // Get initial elements from the database.
 		// events := SQLGatherEvents(since, newestDeleted) // TODO: add database filtering
 		// for _, event := range events {
@@ -422,28 +317,26 @@ func Stream[T any](
 		// }
 	}
 
-	// start processing events from publisher
-	waitForSomething := func(head *SubscriberEvent[T]) (*SubscriberEvent[T], bool) {
+	waitForSomething := func() ([]*Event[T], bool) {
 		sub.Cond.L.Lock()
 		defer sub.Cond.L.Unlock()
-		for sub.Head == head && !sub.Closed {
+		for len(sub.Events) == 0 && !sub.Closed {
 			sub.Cond.Wait()
 		}
-		return sub.Head, sub.Closed
+		// steal events
+		events := sub.Events
+		sub.Events = nil
+		return events, sub.Closed
 	}
 
 	for {
-		// process intial or additional events
-		for event := head; event.Event.ID > sub.Seen ; event = event.Next {
-			onEvent(&event.Event)
+		// hand a batch of events to the callback
+		if len(events) > 0 {
+			onEvents(events)
 		}
-		// done with events up to our head
-		if sub.Seen < head.Event.ID {
-			sub.Seen = head.Event.ID
-		}
-		// wait for more
+		// wait for more events
 		var closed bool
-		head, closed = waitForSomething(head)
+		events, closed = waitForSomething()
 		// were we closed?
 		if closed {
 			return
