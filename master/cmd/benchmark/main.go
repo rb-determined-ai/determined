@@ -15,6 +15,7 @@ import (
 // - 1k events per minute
 
 const nStreamers = 10000; // 10k streamers
+const nUsers = 1000; // 1k users
 const avgLifetime = 120; // average streamer lifetime, 2m
 const eventsPerSec = 10000; // 1k events per second
 const eventRelevanceDenom = 10; // 1 of 10 events apply to each streamer
@@ -37,15 +38,23 @@ func EventGen(p *stream.Publisher[int]) {
 		}else{
 			last = now
 		}
-		// generate an event
-		var events []*stream.Event[int]
+		// generate updates
+		var updates []stream.Update[int]
 		for n := 0; n < batchSize; n++ {
-			events = append(events, &stream.Event[int]{id, i})
+			event := &stream.Event[int]{id, i}
 			i = (i + 1) % eventRelevanceDenom
 			id++
+			// generate user map
+			users := make([]int, 0, nUsers * 2 / eventRelevanceDenom)
+			for u := 0; u < nUsers; u++ {
+				if rand.Uint32() % eventRelevanceDenom == 0 {
+					users = append(users, u)
+				}
+			}
+			updates = append(updates, stream.Update[int]{event, users})
 		}
-		// broadcast events
-		stream.Broadcast(p, events)
+		// broadcast updates
+		stream.Broadcast(p, updates)
 		if id - lastReport > reportPeriod {
 			func(){
 				nreported := id - lastReport
@@ -66,6 +75,7 @@ func OneStreamer(p *stream.Publisher[int], id int) {
 	ctx, _ := context.WithDeadline(context.Background(), deadline)
 
 	filter := func(ev *stream.Event[int]) bool {
+		return true
 		return id % eventRelevanceDenom == ev.Msg
 	}
 
@@ -73,7 +83,8 @@ func OneStreamer(p *stream.Publisher[int], id int) {
 		// presently a noop
 	}
 
-	stream.Stream(p, 0, filter, onEvents, ctx)
+	user := id % nUsers
+	stream.Stream(p, 0, user, filter, onEvents, ctx)
 }
 
 func Streamer(p *stream.Publisher[int], id int) {
@@ -86,7 +97,7 @@ func Streamer(p *stream.Publisher[int], id int) {
 }
 
 func main() {
-	publisher := &stream.Publisher[int]{}
+	publisher := stream.NewPublisher[int]()
 	for i := 0; i < nStreamers; i++ {
 		go Streamer(publisher, i)
 	}
