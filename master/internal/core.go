@@ -1124,8 +1124,6 @@ func (m *Master) Run(ctx context.Context) error {
 	resourcesGroup.GET("/allocation/allocations-csv", m.getResourceAllocations)
 	resourcesGroup.GET("/allocation/aggregated", m.getAggregatedResourceAllocation)
 
-	m.echo.GET("/stream", api.WebSocketRoute(m.stream))
-
 	m.echo.POST("/task-logs", api.Route(m.postTaskLogs))
 
 	m.echo.Any("/debug/pprof/*", echo.WrapHandler(http.HandlerFunc(pprof.Index)))
@@ -1192,6 +1190,10 @@ func (m *Master) Run(ctx context.Context) error {
 
 	webhooks.Init()
 	defer webhooks.Deinit()
+
+	pss := NewPubSubSystem()
+	pss.Start(context.Background())
+	m.echo.GET("/stream", api.WebSocketRoute(pss.Websocket))
 
 	return m.startServers(ctx, cert)
 }

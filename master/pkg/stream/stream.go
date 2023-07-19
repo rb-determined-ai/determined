@@ -2,30 +2,27 @@ package stream
 
 import (
 	"sync"
+
+	"github.com/gorilla/websocket"
 )
 
-// Event callbacks have no access to the linked list.
-type Event[T any] struct {
-	ID uint64
-	Msg T
-	// only marshal once per message
-	Bytes []byte
+// Event is an object with a message and a sequence number and json marshal caching.
+type Event interface {
+	SeqNum() int64
+	PreparedMessage() *websocket.PreparedMessage
 }
 
 // Update contains an Event and a slice of applicable user ids
-type Update[T any] struct {
-	Event *Event[T]
+type Update[T Event] struct {
+	Event T
 	Users []int
 }
-
 // Streamer aggregates many events and wakeups into a single slice of pre-marshaled messages.
 // One streamer may be associated with many Subscription[T]'s, but it should only have at most one
 // Subscription per type T.  One Streamer is intended to belong to one websocket connection.
 type Streamer struct {
 	Cond *sync.Cond
-	// Events is a slice of slice pointers, because a slice of slices is actually big enough to
-	// cause a 25% performance penalty in terms of total wakeup throughput.
-	Events []*[]byte
+	Events []*websocket.PreparedMessage
 	// Closed is set externally, and noticed eventually.
 	Closed bool
 }
@@ -36,6 +33,19 @@ func NewStreamer() *Streamer {
 	return &Streamer{ Cond: cond }
 }
 
+// WaitForSomething returns a tuple of (events, closed)
+func (s *Streamer) WaitForSomething() ([]*websocket.PreparedMessage, bool) {
+	s.Cond.L.Lock()
+	defer s.Cond.L.Unlock()
+	for len(s.Events) == 0 && !s.Closed {
+		s.Cond.Wait()
+	}
+	// steal events
+	events := s.Events
+	s.Events = nil
+	return events, s.Closed
+}
+
 func (s *Streamer) Close() {
 	s.Cond.L.Lock()
 	defer s.Cond.L.Unlock()
@@ -43,46 +53,46 @@ func (s *Streamer) Close() {
 	s.Closed = true
 }
 
-type Subscription[T any] struct {
+type Subscription[T Event] struct {
 	// Which streamer is collecting events from this Subscription?
 	Streamer *Streamer
 	// Decide if the streamer wants this event.
-	Predicate func(*Event[T]) bool
+	Predicate func(T) bool
 	// wakeupID prevent duplicate wakeups if multiple events in a single Broadcast are relevant
-	wakeupID uint64
+	wakeupID int64
 }
 
-func NewSubscription[T any](streamer *Streamer, predicate func(*Event[T]) bool) *Subscription[T] {
+func NewSubscription[T Event](streamer *Streamer, predicate func(T) bool) *Subscription[T] {
 	return &Subscription[T]{ Streamer: streamer, Predicate: predicate }
 }
 
 // UserGroup is a set of filters belonging to the same user.  It is part of stream rbac enforcement.
-type UserGroup[T any] struct {
+type UserGroup[T Event] struct {
 	Subscriptions []*Subscription[T]
-	Events []*Event[T]
+	Events []T
 
 	// a self-pointer for efficient update tracking
 	next     *UserGroup[T]
-	wakeupID uint64
+	wakeupID int64
 }
 
-type Publisher[T any] struct {
+type Publisher[T Event] struct {
 	Lock sync.Mutex
 	// map userids to subscriptions matching those userids
 	UserGroups map[int]*UserGroup[T]
 	// The most recent published event (won't be published again)
-	NewestPublished uint64
-	WakeupID uint64
+	NewestPublished int64
+	WakeupID int64
 }
 
-func NewPublisher[T any]() *Publisher[T]{
+func NewPublisher[T Event]() *Publisher[T]{
 	return &Publisher[T]{
 		UserGroups: make(map[int]*UserGroup[T]),
 	}
 }
 
 // returns current NewestPublished
-func AddSubscription[T any](p *Publisher[T], sub *Subscription[T], user int) uint64 {
+func (p *Publisher[T]) AddSubscription(sub *Subscription[T], user int) int64 {
 	p.Lock.Lock()
 	defer p.Lock.Unlock()
 	usergrp, ok := p.UserGroups[user]
@@ -94,7 +104,7 @@ func AddSubscription[T any](p *Publisher[T], sub *Subscription[T], user int) uin
 	return p.NewestPublished
 }
 
-func RemoveSubscription[T any](p *Publisher[T], sub *Subscription[T], user int) {
+func (p *Publisher[T]) RemoveSubscription(sub *Subscription[T], user int) {
 	p.Lock.Lock()
 	defer p.Lock.Unlock()
 	usergrp := p.UserGroups[user]
@@ -108,7 +118,7 @@ func RemoveSubscription[T any](p *Publisher[T], sub *Subscription[T], user int) 
 	}
 }
 
-func Broadcast[T any](p *Publisher[T], updates []Update[T]) {
+func Broadcast[T Event](p *Publisher[T], updates []Update[T]) {
 	p.Lock.Lock()
 	defer p.Lock.Unlock()
 
@@ -122,8 +132,8 @@ func Broadcast[T any](p *Publisher[T], updates []Update[T]) {
 	// pass each update to each UserGroup representing users who are allowed to see it
 	for _, update := range updates {
 		// keep track of the newest published event
-		if update.Event.ID > p.NewestPublished {
-			p.NewestPublished = update.Event.ID
+		if update.Event.SeqNum() > p.NewestPublished {
+			p.NewestPublished = update.Event.SeqNum()
 		}
 		for _, user := range update.Users {
 			// find matching user group
@@ -174,7 +184,7 @@ func Broadcast[T any](p *Publisher[T], updates []Update[T]) {
 					// TODO: actually marshal with caching
 
 					// sub.Streamer.Events = append(sub.Streamer.Events, event)
-					sub.Streamer.Events = append(sub.Streamer.Events, &event.Bytes)
+					sub.Streamer.Events = append(sub.Streamer.Events, event.PreparedMessage())
 				}
 			}
 		}()

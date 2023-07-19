@@ -4,6 +4,10 @@ import (
 	"context"
 	"time"
 	"math/rand"
+	// "encoding/json"
+	"github.com/goccy/go-json"
+
+	"github.com/gorilla/websocket"
 
 	"github.com/determined-ai/determined/master/pkg/stream"
 )
@@ -20,19 +24,38 @@ const avgLifetime = 120; // average streamer lifetime, 2m
 const eventRelevanceDenom = 10; // 1 of 10 events apply to each streamer
 const batchSize = 100;
 
-type MsgType = struct{}
-// type RecvType = []*stream.Event[MsgType]
-type RecvType = []*[]byte
+type Msg struct {
+	ID int64
+}
 
-func EventGen(p *stream.Publisher[MsgType]) {
+func (m *Msg) SeqNum() int64 {
+	return m.ID
+}
+
+func (m *Msg) PreparedMessage() *websocket.PreparedMessage {
+	_, err := json.Marshal(m)
+	if err != nil {
+		println(err.Error())
+		return nil
+	}
+	jbytes := []byte("{ID: 1}")
+	msg, err := websocket.NewPreparedMessage(websocket.BinaryMessage, jbytes)
+	if err != nil {
+		println(err.Error())
+		return nil
+	}
+	return msg
+}
+
+func EventGen(p *stream.Publisher[*Msg]) {
 	nextReportTime := time.Now().Add(1 * time.Second)
-	id := uint64(0)
+	id := int64(0)
 	lastReportId := id
 	for {
 		// generate updates
-		var updates []stream.Update[MsgType]
+		var updates []stream.Update[*Msg]
 		for n := 0; n < batchSize; n++ {
-			event := &stream.Event[MsgType]{ID: id}
+			event := &Msg{ID: id}
 			id++
 			// generate user map
 			users := make([]int, 0, nUsers * 2 / eventRelevanceDenom)
@@ -41,7 +64,7 @@ func EventGen(p *stream.Publisher[MsgType]) {
 					users = append(users, u)
 				}
 			}
-			updates = append(updates, stream.Update[MsgType]{event, users})
+			updates = append(updates, stream.Update[*Msg]{event, users})
 		}
 		// broadcast updates
 		stream.Broadcast(p, updates)
@@ -55,7 +78,7 @@ func EventGen(p *stream.Publisher[MsgType]) {
 	}
 }
 
-func OneStreamer(p *stream.Publisher[MsgType], id int) {
+func OneStreamer(p *stream.Publisher[*Msg], id int) {
 	user := id % nUsers
 
 	// pick a random lifetime
@@ -71,20 +94,20 @@ func OneStreamer(p *stream.Publisher[MsgType], id int) {
 		streamer.Close()
 	}()
 
-	pred := func(ev *stream.Event[MsgType]) bool {
+	pred := func(ev *Msg) bool {
 		return true
 	}
 
-	sub := stream.NewSubscription[MsgType](streamer, pred)
+	sub := stream.NewSubscription[*Msg](streamer, pred)
 
 	// don't care about newest published yet
-	_ = stream.AddSubscription(p, sub, user)
-	defer stream.RemoveSubscription(p, sub, user)
+	_ = p.AddSubscription(sub, user)
+	defer p.RemoveSubscription(sub, user)
 
-	var events RecvType
+	var events []*websocket.PreparedMessage
 
 	// Listen for wakeups on our Streamer.Cond.
-	waitForSomething := func() (RecvType, bool) {
+	waitForSomething := func() ([]*websocket.PreparedMessage, bool) {
 		streamer.Cond.L.Lock()
 		defer streamer.Cond.L.Unlock()
 		for len(streamer.Events) == 0 && !streamer.Closed {
@@ -96,15 +119,10 @@ func OneStreamer(p *stream.Publisher[MsgType], id int) {
 		return events, streamer.Closed
 	}
 
-	onEvents := func(evs RecvType) {
-		// presently a noop
-		// time.Sleep(20 * time.Millisecond)
-	}
-
 	for {
 		// hand a batch of events to the callback
 		if len(events) > 0 {
-			onEvents(events)
+			// presently a noop
 		}
 		// wait for more events
 		var closed bool
@@ -116,7 +134,7 @@ func OneStreamer(p *stream.Publisher[MsgType], id int) {
 	}
 }
 
-func Streamer(p *stream.Publisher[MsgType], id int) {
+func Streamer(p *stream.Publisher[*Msg], id int) {
 	// watch the thundering herd
 	time.Sleep(2 * time.Second)
 
@@ -126,7 +144,7 @@ func Streamer(p *stream.Publisher[MsgType], id int) {
 }
 
 func main() {
-	publisher := stream.NewPublisher[MsgType]()
+	publisher := stream.NewPublisher[*Msg]()
 	for i := 0; i < nStreamers; i++ {
 		go Streamer(publisher, i)
 	}
