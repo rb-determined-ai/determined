@@ -20,17 +20,19 @@ const avgLifetime = 120; // average streamer lifetime, 2m
 const eventRelevanceDenom = 10; // 1 of 10 events apply to each streamer
 const batchSize = 100;
 
-func EventGen(p *stream.Publisher[int]) {
+type MsgType = struct{}
+// type RecvType = []*stream.Event[MsgType]
+type RecvType = []*[]byte
+
+func EventGen(p *stream.Publisher[MsgType]) {
 	nextReportTime := time.Now().Add(1 * time.Second)
 	id := uint64(0)
 	lastReportId := id
-	i := 0
 	for {
 		// generate updates
-		var updates []stream.Update[int]
+		var updates []stream.Update[MsgType]
 		for n := 0; n < batchSize; n++ {
-			event := &stream.Event[int]{id, i}
-			i = (i + 1) % eventRelevanceDenom
+			event := &stream.Event[MsgType]{ID: id}
 			id++
 			// generate user map
 			users := make([]int, 0, nUsers * 2 / eventRelevanceDenom)
@@ -39,7 +41,7 @@ func EventGen(p *stream.Publisher[int]) {
 					users = append(users, u)
 				}
 			}
-			updates = append(updates, stream.Update[int]{event, users})
+			updates = append(updates, stream.Update[MsgType]{event, users})
 		}
 		// broadcast updates
 		stream.Broadcast(p, updates)
@@ -53,26 +55,68 @@ func EventGen(p *stream.Publisher[int]) {
 	}
 }
 
-func OneStreamer(p *stream.Publisher[int], id int) {
+func OneStreamer(p *stream.Publisher[MsgType], id int) {
+	user := id % nUsers
+
 	// pick a random lifetime
 	lifetime := avgLifetime + time.Duration(rand.NormFloat64() * float64(avgLifetime) / 4.0)
 	deadline := time.Now().Add(lifetime * time.Second)
 	ctx, _ := context.WithDeadline(context.Background(), deadline)
 
-	filter := func(ev *stream.Event[int]) bool {
+
+	streamer := stream.NewStreamer()
+
+	go func(){
+		<-ctx.Done()
+		streamer.Close()
+	}()
+
+	pred := func(ev *stream.Event[MsgType]) bool {
 		return true
-		return id % eventRelevanceDenom == ev.Msg
 	}
 
-	onEvents := func(evs []*stream.Event[int]) {
+	sub := stream.NewSubscription[MsgType](streamer, pred)
+
+	// don't care about newest published yet
+	_ = stream.AddSubscription(p, sub, user)
+	defer stream.RemoveSubscription(p, sub, user)
+
+	var events RecvType
+
+	// Listen for wakeups on our Streamer.Cond.
+	waitForSomething := func() (RecvType, bool) {
+		streamer.Cond.L.Lock()
+		defer streamer.Cond.L.Unlock()
+		for len(streamer.Events) == 0 && !streamer.Closed {
+			streamer.Cond.Wait()
+		}
+		// steal events
+		events := streamer.Events
+		streamer.Events = nil
+		return events, streamer.Closed
+	}
+
+	onEvents := func(evs RecvType) {
 		// presently a noop
+		// time.Sleep(20 * time.Millisecond)
 	}
 
-	user := id % nUsers
-	stream.Stream(p, 0, user, filter, onEvents, ctx)
+	for {
+		// hand a batch of events to the callback
+		if len(events) > 0 {
+			onEvents(events)
+		}
+		// wait for more events
+		var closed bool
+		events, closed = waitForSomething()
+		// were we closed?
+		if closed {
+			return
+		}
+	}
 }
 
-func Streamer(p *stream.Publisher[int], id int) {
+func Streamer(p *stream.Publisher[MsgType], id int) {
 	// watch the thundering herd
 	time.Sleep(2 * time.Second)
 
@@ -82,7 +126,7 @@ func Streamer(p *stream.Publisher[int], id int) {
 }
 
 func main() {
-	publisher := stream.NewPublisher[int]()
+	publisher := stream.NewPublisher[MsgType]()
 	for i := 0; i < nStreamers; i++ {
 		go Streamer(publisher, i)
 	}

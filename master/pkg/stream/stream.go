@@ -2,13 +2,14 @@ package stream
 
 import (
 	"sync"
-	"context"
 )
 
 // Event callbacks have no access to the linked list.
 type Event[T any] struct {
 	ID uint64
 	Msg T
+	// only marshal once per message
+	Bytes []byte
 }
 
 // Update contains an Event and a slice of applicable user ids
@@ -17,27 +18,58 @@ type Update[T any] struct {
 	Users []int
 }
 
-type Subscriber[T any] struct {
-	User int
-	// filter is applied before a wakeup
-	Filter func(*Event[T]) bool
+// Streamer aggregates many events and wakeups into a single slice of pre-marshaled messages.
+// One streamer may be associated with many Subscription[T]'s, but it should only have at most one
+// Subscription per type T.  One Streamer is intended to belong to one websocket connection.
+type Streamer struct {
 	Cond *sync.Cond
-	Events []*Event[T]
-	// Is this subscriber closed?  Set externally, Subscriber notices eventually.
+	// Events is a slice of slice pointers, because a slice of slices is actually big enough to
+	// cause a 25% performance penalty in terms of total wakeup throughput.
+	Events []*[]byte
+	// Closed is set externally, and noticed eventually.
 	Closed bool
 }
 
-type SubscriberGroup[T any] struct {
-	Subscribers []*Subscriber[T]
-	WakeupID uint64
+func NewStreamer() *Streamer {
+	var lock sync.Mutex
+	cond := sync.NewCond(&lock)
+	return &Streamer{ Cond: cond }
+}
+
+func (s *Streamer) Close() {
+	s.Cond.L.Lock()
+	defer s.Cond.L.Unlock()
+	s.Cond.Signal()
+	s.Closed = true
+}
+
+type Subscription[T any] struct {
+	// Which streamer is collecting events from this Subscription?
+	Streamer *Streamer
+	// Decide if the streamer wants this event.
+	Predicate func(*Event[T]) bool
+	// wakeupID prevent duplicate wakeups if multiple events in a single Broadcast are relevant
+	wakeupID uint64
+}
+
+func NewSubscription[T any](streamer *Streamer, predicate func(*Event[T]) bool) *Subscription[T] {
+	return &Subscription[T]{ Streamer: streamer, Predicate: predicate }
+}
+
+// UserGroup is a set of filters belonging to the same user.  It is part of stream rbac enforcement.
+type UserGroup[T any] struct {
+	Subscriptions []*Subscription[T]
 	Events []*Event[T]
+
+	// a self-pointer for efficient update tracking
+	next     *UserGroup[T]
+	wakeupID uint64
 }
 
 type Publisher[T any] struct {
 	Lock sync.Mutex
-	// map userids to subscribers matching those userids
-	// XXX: benchmark with slice instead of map
-	UserSubs map[int]*SubscriberGroup[T]
+	// map userids to subscriptions matching those userids
+	UserGroups map[int]*UserGroup[T]
 	// The most recent published event (won't be published again)
 	NewestPublished uint64
 	WakeupID uint64
@@ -45,32 +77,32 @@ type Publisher[T any] struct {
 
 func NewPublisher[T any]() *Publisher[T]{
 	return &Publisher[T]{
-		UserSubs: make(map[int]*SubscriberGroup[T]),
+		UserGroups: make(map[int]*UserGroup[T]),
 	}
 }
 
 // returns current NewestPublished
-func AddSubscriber[T any](p *Publisher[T], sub *Subscriber[T]) uint64 {
+func AddSubscription[T any](p *Publisher[T], sub *Subscription[T], user int) uint64 {
 	p.Lock.Lock()
 	defer p.Lock.Unlock()
-	usersub, ok := p.UserSubs[sub.User]
+	usergrp, ok := p.UserGroups[user]
 	if !ok {
-		usersub = &SubscriberGroup[T]{}
-		p.UserSubs[sub.User] = usersub
+		usergrp = &UserGroup[T]{}
+		p.UserGroups[user] = usergrp
 	}
-	usersub.Subscribers = append(usersub.Subscribers, sub)
+	usergrp.Subscriptions = append(usergrp.Subscriptions, sub)
 	return p.NewestPublished
 }
 
-func RemoveSubscriber[T any](p *Publisher[T], sub *Subscriber[T]) {
+func RemoveSubscription[T any](p *Publisher[T], sub *Subscription[T], user int) {
 	p.Lock.Lock()
 	defer p.Lock.Unlock()
-	usersub := p.UserSubs[sub.User]
-	for i, s := range usersub.Subscribers {
+	usergrp := p.UserGroups[user]
+	for i, s := range usergrp.Subscriptions {
 		if s == sub {
-			last := len(usersub.Subscribers) - 1
-			usersub.Subscribers[i] = usersub.Subscribers[last]
-			usersub.Subscribers = usersub.Subscribers[:last]
+			last := len(usergrp.Subscriptions) - 1
+			usergrp.Subscriptions[i] = usergrp.Subscriptions[last]
+			usergrp.Subscriptions = usergrp.Subscriptions[:last]
 			return
 		}
 	}
@@ -84,6 +116,10 @@ func Broadcast[T any](p *Publisher[T], updates []Update[T]) {
 	p.WakeupID++
 	wakeupID := p.WakeupID
 
+	groupSentinel := UserGroup[T]{}
+	activeGroups := &groupSentinel
+
+	// pass each update to each UserGroup representing users who are allowed to see it
 	for _, update := range updates {
 		// keep track of the newest published event
 		if update.Event.ID > p.NewestPublished {
@@ -91,130 +127,56 @@ func Broadcast[T any](p *Publisher[T], updates []Update[T]) {
 		}
 		for _, user := range update.Users {
 			// find matching user group
-			usersub, ok := p.UserSubs[user]
-			if !ok || len(usersub.Subscribers) == 0 {
+			usergrp, ok := p.UserGroups[user]
+			if !ok || len(usergrp.Subscriptions) == 0 {
 				continue
 			}
-			// re-initialize usersub?
-			if wakeupID != usersub.WakeupID {
-				usersub.Events = nil
-				usersub.WakeupID = wakeupID
+			// first event for this user sub?
+			if wakeupID != usergrp.wakeupID {
+				usergrp.wakeupID = wakeupID
+				usergrp.next = activeGroups
+				activeGroups = usergrp
+				// re-initialize events
+				usergrp.Events = nil
 			}
-			// add event to usersub
-			usersub.Events = append(usersub.Events, update.Event)
+			// add event to usergrp
+			usergrp.Events = append(usergrp.Events, update.Event)
 		}
 	}
 
-	// do wakeups
-	for _, usersub := range p.UserSubs {
-		// any updates for this user?
-		if usersub.WakeupID != wakeupID {
-			continue
-		}
-		for _, sub := range usersub.Subscribers {
-			func(){
-				wakeup := false
-				for _, event := range usersub.Events {
-					// does this subscriber want this event?
-					if !sub.Filter(event) {
+	// do wakeups, visiting the active usergrps we collected in our list
+	usergrp := activeGroups
+	next := usergrp.next
+	activeGroups = nil
+	for ; usergrp != &groupSentinel; usergrp = next {
+		// break down the list as we go, so gc is effective
+		next = usergrp.next
+		usergrp.next = nil
+
+		// Deliver fewer wakeups: any streamer may own many subscriptions in this UserGroup,
+		// but since SubscriptionGroups are user-based, no streamer can own subsriptions in two
+		// groups.
+		func(){
+			for _, sub := range usergrp.Subscriptions {
+				for _, event := range usergrp.Events {
+					// does this subscription want this event?
+					if !sub.Predicate(event){
 						continue
 					}
-					// is it the first event for this subscriber?
-					if !wakeup {
-						wakeup = true
-						sub.Cond.L.Lock()
-						defer sub.Cond.L.Unlock()
-						defer sub.Cond.Signal()
+					// is it the first event for this Subscription?
+					if sub.wakeupID != wakeupID {
+						sub.wakeupID = wakeupID
+						sub.Streamer.Cond.L.Lock()
+						defer sub.Streamer.Cond.L.Unlock()
+						sub.Streamer.Cond.Signal()
 					}
-					sub.Events = append(sub.Events, event)
+					// append bytes into the Streamer, which is type-independent
+					// TODO: actually marshal with caching
+
+					// sub.Streamer.Events = append(sub.Streamer.Events, event)
+					sub.Streamer.Events = append(sub.Streamer.Events, &event.Bytes)
 				}
-			}()
-		}
-	}
-}
-
-func NewSubscriber[T any](user int, filter func(*Event[T]) bool) *Subscriber[T] {
-	var lock sync.Mutex
-	cond := sync.NewCond(&lock)
-	return &Subscriber[T]{User: user, Filter: filter, Cond: cond}
-}
-
-func CloseSubscriber[T any](sub *Subscriber[T]){
-	sub.Cond.L.Lock()
-	defer sub.Cond.L.Unlock()
-	sub.Closed = true
-	sub.Cond.Signal()
-}
-
-func Stream[T any](
-	p *Publisher[T],
-	since uint64,
-	user int,
-	filter func(*Event[T]) bool,
-	onEvents func([]*Event[T]),
-	ctx context.Context,
-) {
-	sub := NewSubscriber(user, filter)
-
-	// We need a way to detect ctx.Done() and also a sync.Cond-based shutdown for this streamer,
-	// since the REST API endpoint uses a context (which is idiomatic and simple), but the publisher
-	// uses sync.Cond instead of channels (because the publisher must never block).
-	//
-	// One solution is to introduce an extra goroutine to receive Cond wakeups and send events over
-	// channels.  That introduces an extra context switch per event per websocket.
-	//
-	// A lighter weight solution is to use one goroutine per websocket to wait on the context and
-	// call trigger the Cond-based shutdown.  That solution requires an equal number of goroutines
-	// but only requires a context switch once over the whole lifetime of the websocket.
-	//
-	// An even lighter soultion would be to use one goroutine to watch all contexts (a dynamic
-	// number of them) using a hierarchical waiting scheme, like this one:
-	//
-	//     https://cyolo.io/blog/how-we-enabled-dynamic-channel-selection-at-scale-in-go/
-	//
-	// But that's probably not useful at our scale yet, and probably we should avoid
-	// one-goroutine-per websocket before we fight that battle anyway.
-	go func(){
-		<-ctx.Done()
-		CloseSubscriber(sub)
-	}()
-
-	newestPublished := AddSubscriber(p, sub)
-	defer RemoveSubscriber(p, sub)
-
-	var events []*Event[T]
-
-	if since < newestPublished {
-		// // Get initial elements from the database.
-		// events := SQLGatherEvents(since, newestDeleted) // TODO: add database filtering
-		// for _, event := range events {
-		// 	msgs <- event
-		// }
-	}
-
-	waitForSomething := func() ([]*Event[T], bool) {
-		sub.Cond.L.Lock()
-		defer sub.Cond.L.Unlock()
-		for len(sub.Events) == 0 && !sub.Closed {
-			sub.Cond.Wait()
-		}
-		// steal events
-		events := sub.Events
-		sub.Events = nil
-		return events, sub.Closed
-	}
-
-	for {
-		// hand a batch of events to the callback
-		if len(events) > 0 {
-			onEvents(events)
-		}
-		// wait for more events
-		var closed bool
-		events, closed = waitForSomething()
-		// were we closed?
-		if closed {
-			return
-		}
+			}
+		}()
 	}
 }
