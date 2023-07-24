@@ -17,27 +17,15 @@ import (
 const nStreamers = 10000; // 10k streamers
 const nUsers = 1000; // 1k users
 const avgLifetime = 120; // average streamer lifetime, 2m
-const eventsPerSec = 10000; // 1k events per second
 const eventRelevanceDenom = 10; // 1 of 10 events apply to each streamer
 const batchSize = 100;
 
 func EventGen(p *stream.Publisher[int]) {
-	const reportPeriod = eventsPerSec
+	nextReportTime := time.Now().Add(1 * time.Second)
 	id := uint64(0)
-	lastReport := id
+	lastReportId := id
 	i := 0
-	last := time.Now()
-	lastReportTime := last
-	interval := time.Second / eventsPerSec * batchSize
 	for {
-		now := time.Now()
-		next := last.Add(interval)
-		if next.After(now) {
-			// time.Sleep(next.Sub(now))
-			last = next
-		}else{
-			last = now
-		}
 		// generate updates
 		var updates []stream.Update[int]
 		for n := 0; n < batchSize; n++ {
@@ -55,15 +43,12 @@ func EventGen(p *stream.Publisher[int]) {
 		}
 		// broadcast updates
 		stream.Broadcast(p, updates)
-		if id - lastReport > reportPeriod {
-			func(){
-				nreported := id - lastReport
-				lastReport = id
-				now := time.Now()
-				reportWindow := float64(now.Sub(lastReportTime)) / float64(time.Second)
-				lastReportTime = now
-				println("events per second:", int(float64(nreported)/reportWindow))
-			}()
+		now := time.Now()
+		if now.After(nextReportTime) {
+			nreported := id - lastReportId
+			lastReportId = id
+			nextReportTime = nextReportTime.Add(1 * time.Second)
+			println("events per second:", nreported)
 		}
 	}
 }
