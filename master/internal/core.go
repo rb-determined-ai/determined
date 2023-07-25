@@ -53,6 +53,7 @@ import (
 	"github.com/determined-ai/determined/master/internal/proxy"
 	"github.com/determined-ai/determined/master/internal/rm"
 	"github.com/determined-ai/determined/master/internal/task"
+	"github.com/determined-ai/determined/master/internal/stream"
 	"github.com/determined-ai/determined/master/internal/task/tasklogger"
 	"github.com/determined-ai/determined/master/internal/task/taskmodel"
 	"github.com/determined-ai/determined/master/internal/telemetry"
@@ -1191,7 +1192,7 @@ func (m *Master) Run(ctx context.Context) error {
 	webhooks.Init()
 	defer webhooks.Deinit()
 
-	pss := NewPubSubSystem()
+	pss := stream.NewPubSubSystem()
 	pss.Start(context.Background())
 	m.echo.GET("/stream", api.WebSocketRoute(pss.Websocket))
 
