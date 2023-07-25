@@ -26,6 +26,7 @@ const batchSize = 100;
 
 type Msg struct {
 	ID int64
+	cache *websocket.PreparedMessage
 }
 
 func (m *Msg) SeqNum() int64 {
@@ -33,6 +34,9 @@ func (m *Msg) SeqNum() int64 {
 }
 
 func (m *Msg) PreparedMessage() *websocket.PreparedMessage {
+	if m.cache != nil {
+		return m.cache
+	}
 	_, err := json.Marshal(m)
 	if err != nil {
 		println(err.Error())
@@ -44,6 +48,7 @@ func (m *Msg) PreparedMessage() *websocket.PreparedMessage {
 		println(err.Error())
 		return nil
 	}
+	m.cache = msg
 	return msg
 }
 

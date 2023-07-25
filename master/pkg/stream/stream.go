@@ -23,6 +23,9 @@ type Update[T Event] struct {
 type Streamer struct {
 	Cond *sync.Cond
 	Events []*websocket.PreparedMessage
+	// SubscriptionSpecs are opaque to the streaming API; but they are passed through the Streamer
+	// to make writing websocket goroutines easier.
+	SubscriptionSpecs []interface{}
 	// Closed is set externally, and noticed eventually.
 	Closed bool
 }
@@ -33,17 +36,17 @@ func NewStreamer() *Streamer {
 	return &Streamer{ Cond: cond }
 }
 
-// WaitForSomething returns a tuple of (events, closed)
-func (s *Streamer) WaitForSomething() ([]*websocket.PreparedMessage, bool) {
+// WaitForSomething returns a tuple of (subSpecs, events, closed)
+func (s *Streamer) WaitForSomething() ([]interface{}, []*websocket.PreparedMessage, bool) {
 	s.Cond.L.Lock()
 	defer s.Cond.L.Unlock()
-	for len(s.Events) == 0 && !s.Closed {
-		s.Cond.Wait()
-	}
-	// steal events
+	s.Cond.Wait()
+	// steal outputs
+	subs := s.SubscriptionSpecs
+	s.SubscriptionSpecs = nil
 	events := s.Events
 	s.Events = nil
-	return events, s.Closed
+	return subs, events, s.Closed
 }
 
 func (s *Streamer) Close() {
@@ -60,10 +63,21 @@ type Subscription[T Event] struct {
 	Predicate func(T) bool
 	// wakeupID prevent duplicate wakeups if multiple events in a single Broadcast are relevant
 	wakeupID int64
+	// track our publisher for atomic updates to our predicate function
+	publisher *Publisher[T]
 }
 
 func NewSubscription[T Event](streamer *Streamer, predicate func(T) bool) *Subscription[T] {
 	return &Subscription[T]{ Streamer: streamer, Predicate: predicate }
+}
+
+func (s *Subscription[T]) SetPredicate(predicate func(T) bool) {
+	if s.publisher != nil {
+		// wait for a break between broadcasts
+		s.publisher.Lock.Lock()
+		defer s.publisher.Lock.Unlock()
+	}
+	s.Predicate = predicate
 }
 
 // UserGroup is a set of filters belonging to the same user.  It is part of stream rbac enforcement.
@@ -101,6 +115,7 @@ func (p *Publisher[T]) AddSubscription(sub *Subscription[T], user int) int64 {
 		p.UserGroups[user] = usergrp
 	}
 	usergrp.Subscriptions = append(usergrp.Subscriptions, sub)
+	sub.publisher = p
 	return p.NewestPublished
 }
 
@@ -109,12 +124,14 @@ func (p *Publisher[T]) RemoveSubscription(sub *Subscription[T], user int) {
 	defer p.Lock.Unlock()
 	usergrp := p.UserGroups[user]
 	for i, s := range usergrp.Subscriptions {
-		if s == sub {
-			last := len(usergrp.Subscriptions) - 1
-			usergrp.Subscriptions[i] = usergrp.Subscriptions[last]
-			usergrp.Subscriptions = usergrp.Subscriptions[:last]
-			return
+		if s != sub {
+			continue
 		}
+		last := len(usergrp.Subscriptions) - 1
+		usergrp.Subscriptions[i] = usergrp.Subscriptions[last]
+		usergrp.Subscriptions = usergrp.Subscriptions[:last]
+		sub.publisher = nil
+		return
 	}
 }
 

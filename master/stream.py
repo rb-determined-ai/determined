@@ -17,6 +17,7 @@ for event in ws.connect():
         print(event.text.strip())
     elif isinstance(event, events.Ready):
         print("ready")
+        ws.send_binary(b'{"add": {"trials": {"trial_ids": [1]}}}')
     elif isinstance(event, (events.ConnectFail, events.Rejected, events.ProtocolError)):
         raise Exception(f"connection failed: {event}")
     elif isinstance(event, (events.Closing, events.Disconnected)):

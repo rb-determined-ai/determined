@@ -47,6 +47,8 @@ type TrialMsg struct {
 	Seq int64                   `bun:"seq"`
 
 	// total batches?
+
+	cache *websocket.PreparedMessage
 }
 
 func (tm *TrialMsg) SeqNum() int64 {
@@ -54,17 +56,20 @@ func (tm *TrialMsg) SeqNum() int64 {
 }
 
 func (tm *TrialMsg) PreparedMessage() *websocket.PreparedMessage {
+	if tm.cache != nil {
+		return tm.cache
+	}
 	jbytes, err := json.Marshal(tm)
 	if err != nil {
 		log.Errorf("error marshaling message for streaming: %v", err.Error())
 		return nil
 	}
-	msg, err := websocket.NewPreparedMessage(websocket.BinaryMessage, jbytes)
+	tm.cache, err = websocket.NewPreparedMessage(websocket.BinaryMessage, jbytes)
 	if err != nil {
 		log.Errorf("error preparing message for streaming: %v", err.Error())
 		return nil
 	}
-	return msg
+	return tm.cache
 }
 
 // scan for updates to the trials table
@@ -76,6 +81,7 @@ func newTrialMsgs(since int64, ctx context.Context) (int64, []*TrialMsg, error) 
 		return since, nil, err
 	}
 
+
 	newSince := since
 	for _, tm := range trialMsgs {
 		if tm.Seq > newSince {
@@ -84,6 +90,152 @@ func newTrialMsgs(since int64, ctx context.Context) (int64, []*TrialMsg, error) 
 	}
 
 	return newSince, trialMsgs, nil
+}
+
+// TrialSubscriptionSpec are what a user submits to define their trial subscriptions.
+type TrialSubscriptionSpec struct {
+	TrialIds      []int  `json:"trial_ids"`
+	ExperimentIds []int  `json:"experiment_ids"`
+}
+
+// When a user submits a new TrialSubscriptionSpec, we scrape the database for initial matches.
+func (tss *TrialSubscriptionSpec) InitialScan(ctx context.Context) (
+	[]*websocket.PreparedMessage, error,
+) {
+	if len(tss.TrialIds) == 0 && len(tss.ExperimentIds) == 0 {
+		return nil, nil
+	}
+	var trialMsgs []*TrialMsg
+	q := db.Bun().NewSelect().Model(&trialMsgs)
+	where := q.Where
+	if len(tss.TrialIds) > 0 {
+		q = where("id in (?)", bun.In(tss.TrialIds))
+		where = q.WhereOr
+	}
+	if len(tss.ExperimentIds) > 0 {
+		q = where("experiment_id in (?)", bun.In(tss.ExperimentIds))
+		where = q.WhereOr
+	}
+	err := q.Scan(ctx)
+	if err != nil && errors.Cause(err) != sql.ErrNoRows {
+		fmt.Printf("error: %v\n", err)
+		return nil, err
+	}
+
+	var out []*websocket.PreparedMessage
+	for _, msg := range trialMsgs {
+		out = append(out, msg.PreparedMessage())
+	}
+	return out, nil
+}
+
+// TrialSubscription implements logic for
+type TrialSubscription struct {
+	TrialIds      map[int]bool
+	ExperimentIds map[int]bool
+}
+
+func (ts *TrialSubscription) Init() {
+	if ts.TrialIds != nil {
+		return
+	}
+	ts.TrialIds = make(map[int]bool)
+	ts.ExperimentIds = make(map[int]bool)
+}
+
+func (ts *TrialSubscription) AddSpec(spec TrialSubscriptionSpec) {
+	ts.Init()
+	for _, id := range spec.TrialIds {
+		ts.TrialIds[id] = true
+	}
+	for _, id := range spec.ExperimentIds {
+		ts.ExperimentIds[id] = true
+	}
+}
+
+func (ts *TrialSubscription) DropSpec(spec TrialSubscriptionSpec) {
+	ts.Init()
+	for _, id := range spec.TrialIds {
+		delete(ts.TrialIds, id)
+	}
+	for _, id := range spec.ExperimentIds {
+		delete(ts.ExperimentIds, id)
+	}
+}
+
+func (ts *TrialSubscription) MakePredicate() func(*TrialMsg) bool {
+	ts.Init()
+	// make a copy of the maps, because the predicate must run safely off-thread
+	trialIds := make(map[int]bool)
+	experimentIds := make(map[int]bool)
+	for id, _ := range ts.TrialIds {
+		trialIds[id] = true
+	}
+	for id, _ := range ts.ExperimentIds {
+		experimentIds[id] = true
+	}
+
+	// return a closure around our copied maps
+	return func(msg *TrialMsg) bool {
+		if _, ok := trialIds[msg.ID]; ok {
+			return true
+		}
+		if _, ok := experimentIds[msg.ExperimentID]; ok {
+			return true
+		}
+		return false
+	}
+}
+
+// SubscriptionSetSpec is what users submit to modify their subscriptions.
+type SubscriptionSetSpec struct {
+	Trials *TrialSubscriptionSpec `json:"trials"`
+}
+// {"add": {"trials": {"trial_ids": [...], "experiment_ids": [...]}}}
+
+// SpecMods is the message that a user writes to a websocket to modify their subscriptions
+type SpecMods struct {
+	Add SubscriptionSetSpec `json:"add"`
+	Drop SubscriptionSetSpec `json:"drop"`
+}
+
+// SubscriptionSet allows for subscriptions to each type in the PubSubSystem.
+type SubscriptionSet struct {
+	Trials TrialSubscription
+}
+
+// Apply is a helper function that applies a whole set of subscription changes and returns a whole
+// list of new initial scans as a result.
+func (ss *SubscriptionSet) Apply(mods SpecMods, ctx context.Context) (
+	[]*websocket.PreparedMessage, error,
+) {
+	var out []*websocket.PreparedMessage
+
+	// trials
+	if mods.Add.Trials != nil || mods.Drop.Trials != nil {
+		// Modify Subscription before initial scan, to avoid dropping messages.
+		if mods.Add.Trials != nil {
+			ss.Trials.AddSpec(*mods.Add.Trials)
+		}
+		if mods.Drop.Trials != nil {
+			ss.Trials.DropSpec(*mods.Drop.Trials)
+		}
+		// Only call SetPredicate() once per Subscription type, since it is a sync point between the
+		// websocket thread and the publisher thread.
+		// XXX ss.Trials.SetPredicate(ss.Trials.MakePredicate())
+		// Now do initial scan.
+		if mods.Add.Trials != nil {
+			msgs, err := mods.Add.Trials.InitialScan(ctx)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, msgs...)
+		}
+	}
+
+	// ... other types here ...
+
+	return out, nil
 }
 
 // PubSubSystem contains all publishers, and handles all websockets.  It will connect each websocket
@@ -106,11 +258,36 @@ func (pss PubSubSystem) Start(ctx context.Context) {
 // Websocket is an Echo websocket endpoint.
 func (pss PubSubSystem) Websocket(socket *websocket.Conn, c echo.Context) error {
 	streamer := stream.NewStreamer()
+	ss := SubscriptionSet{}
 
 	// detect context cancelation, and bring it into the websocket thread
 	go func() {
 		<-c.Request().Context().Done()
 		streamer.Close()
+	}()
+
+	// always be reading for new subscriptions
+	go func() {
+		// TODO: close streamer if reader goroutine dies?
+		for {
+			var mods SpecMods
+			err := socket.ReadJSON(&mods)
+			if err != nil {
+				if websocket.IsUnexpectedCloseError(
+					err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure,
+				) {
+					log.Errorf("unexpected close error: %v", err)
+				}
+				break
+			}
+			// wake up streamer goroutine with the newly-read SpecMods
+			func() {
+				streamer.Cond.L.Lock()
+				defer streamer.Cond.L.Unlock()
+				streamer.Cond.Signal()
+				streamer.SubscriptionSpecs = append(streamer.SubscriptionSpecs, mods)
+			}()
+		}
 	}()
 
 	user := 1
@@ -123,19 +300,28 @@ func (pss PubSubSystem) Websocket(socket *websocket.Conn, c echo.Context) error 
 	pss.TrialPublisher.AddSubscription(sub, user)
 	defer pss.TrialPublisher.RemoveSubscription(sub, user)
 
-	// TODO: process initial events
-
 	// stream events until the cows come home
 
 	for {
-		events, closed := streamer.WaitForSomething()
+		subs, events, closed := streamer.WaitForSomething()
 		// were we closed?
 		if closed {
 			return nil
 		}
+		if len(subs) > 0 {
+			for _, sub := range subs {
+				mods := sub.(SpecMods)
+				msgs, err := ss.Apply(mods, c.Request().Context())
+				if err != nil {
+					return errors.Wrapf(err, "error modifying subscriptions")
+				}
+				events = append(events, msgs...)
+			}
+		}
 		// write events to the websocket
 		for _, ev := range events {
 			err := socket.WritePreparedMessage(ev)
+			// TODO: don't log broken pipe errors.
 			if err != nil {
 				return errors.Wrapf(err, "error writing to socket")
 			}
