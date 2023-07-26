@@ -5,18 +5,13 @@ import (
 	"database/sql"
 	"time"
 	"fmt"
-	"encoding/json"
 
 	"github.com/gorilla/websocket"
-	"github.com/labstack/echo/v4"
 	"github.com/pkg/errors"
 	"github.com/uptrace/bun"
-	"github.com/lib/pq"
-	log "github.com/sirupsen/logrus"
 
 	"github.com/determined-ai/determined/master/internal/db"
 	"github.com/determined-ai/determined/master/pkg/model"
-	"github.com/determined-ai/determined/master/pkg/stream"
 )
 
 
@@ -55,20 +50,7 @@ func (tm *TrialMsg) SeqNum() int64 {
 }
 
 func (tm *TrialMsg) PreparedMessage() *websocket.PreparedMessage {
-	if tm.cache != nil {
-		return tm.cache
-	}
-	jbytes, err := json.Marshal(tm)
-	if err != nil {
-		log.Errorf("error marshaling message for streaming: %v", err.Error())
-		return nil
-	}
-	tm.cache, err = websocket.NewPreparedMessage(websocket.BinaryMessage, jbytes)
-	if err != nil {
-		log.Errorf("error preparing message for streaming: %v", err.Error())
-		return nil
-	}
-	return tm.cache
+	return prepareMessageWithCache(tm, &tm.cache)
 }
 
 // scan for updates to the trials table
@@ -80,7 +62,6 @@ func newTrialMsgs(since int64, ctx context.Context) (int64, []*TrialMsg, error) 
 		return since, nil, err
 	}
 
-
 	newSince := since
 	for _, tm := range trialMsgs {
 		if tm.Seq > newSince {
@@ -91,14 +72,14 @@ func newTrialMsgs(since int64, ctx context.Context) (int64, []*TrialMsg, error) 
 	return newSince, trialMsgs, nil
 }
 
-// TrialSubscriptionSpec are what a user submits to define their trial subscriptions.
-type TrialSubscriptionSpec struct {
+// TrialFilterMod is what a user submits to define a trial subscription.
+type TrialFilterMod struct {
 	TrialIds      []int  `json:"trial_ids"`
 	ExperimentIds []int  `json:"experiment_ids"`
 }
 
-// When a user submits a new TrialSubscriptionSpec, we scrape the database for initial matches.
-func (tss *TrialSubscriptionSpec) InitialScan(ctx context.Context) (
+// When a user submits a new TrialFilterMod, we scrape the database for initial matches.
+func (tss TrialFilterMod) InitialScan(ctx context.Context) (
 	[]*websocket.PreparedMessage, error,
 ) {
 	if len(tss.TrialIds) == 0 && len(tss.ExperimentIds) == 0 {
@@ -128,43 +109,42 @@ func (tss *TrialSubscriptionSpec) InitialScan(ctx context.Context) (
 	return out, nil
 }
 
-// TrialSubscription implements logic for
-type TrialSubscription struct {
+type TrialFilterMaker struct {
 	TrialIds      map[int]bool
 	ExperimentIds map[int]bool
 }
 
-func (ts *TrialSubscription) Init() {
-	if ts.TrialIds != nil {
-		return
-	}
-	ts.TrialIds = make(map[int]bool)
-	ts.ExperimentIds = make(map[int]bool)
+func NewTrialFilterMaker() FilterMaker[*TrialMsg] {
+	return &TrialFilterMaker{make(map[int]bool), make(map[int]bool)}
 }
 
-func (ts *TrialSubscription) AddSpec(spec TrialSubscriptionSpec) {
-	ts.Init()
-	for _, id := range spec.TrialIds {
+func (ts *TrialFilterMaker) AddSpec(spec FilterMod) {
+	tSpec := spec.(TrialFilterMod)
+	for _, id := range tSpec.TrialIds {
 		ts.TrialIds[id] = true
 	}
-	for _, id := range spec.ExperimentIds {
+	for _, id := range tSpec.ExperimentIds {
 		ts.ExperimentIds[id] = true
 	}
 }
 
-func (ts *TrialSubscription) DropSpec(spec TrialSubscriptionSpec) {
-	ts.Init()
-	for _, id := range spec.TrialIds {
+func (ts *TrialFilterMaker) DropSpec(spec FilterMod) {
+	tSpec := spec.(TrialFilterMod)
+	for _, id := range tSpec.TrialIds {
 		delete(ts.TrialIds, id)
 	}
-	for _, id := range spec.ExperimentIds {
+	for _, id := range tSpec.ExperimentIds {
 		delete(ts.ExperimentIds, id)
 	}
 }
 
-func (ts *TrialSubscription) MakePredicate() func(*TrialMsg) bool {
-	ts.Init()
-	// make a copy of the maps, because the predicate must run safely off-thread
+func (ts *TrialFilterMaker) MakeFilter() func(*TrialMsg) bool {
+	// Should this filter even run?
+	if len(ts.TrialIds) == 0 && len(ts.ExperimentIds) == 0 {
+		return nil
+	}
+
+	// Make a copy of the maps, because the filter must run safely off-thread.
 	trialIds := make(map[int]bool)
 	experimentIds := make(map[int]bool)
 	for id, _ := range ts.TrialIds {

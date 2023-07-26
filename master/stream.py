@@ -8,13 +8,25 @@ from determined.experimental import client
 client.login(url)
 token = client._determined._session._auth.session.token
 
+_state = 0
+def late_sub(ws):
+    global _state
+    _state += 1
+    if _state == 3:
+        print("------ updating subscription ------------")
+        ws.send_binary(
+            b'{"add": {"trials": {"trial_ids": [2]}}, "drop": {"trials": {"trial_ids": [1]}}}'
+        )
+
 ws = lomond.WebSocket(f"{url}/stream")
 ws.add_header(b"Authorization", f"Bearer {token}".encode('utf8'))
 for event in ws.connect():
     if isinstance(event, events.Binary):
         print(event.data.decode('utf8'))
+        late_sub(ws)
     elif isinstance(event, events.Text):
         print(event.text.strip())
+        late_sub(ws)
     elif isinstance(event, events.Ready):
         print("ready")
         ws.send_binary(b'{"add": {"trials": {"trial_ids": [1]}}}')
