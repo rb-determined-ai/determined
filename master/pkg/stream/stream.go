@@ -20,17 +20,17 @@ type Update[T Event] struct {
 // Streamer aggregates many events and wakeups into a single slice of pre-marshaled messages.
 // One streamer may be associated with many Subscription[T]'s, but it should only have at most one
 // Subscription per type T.  One Streamer is intended to belong to one websocket connection.
-type Streamer struct {
+type Streamer[R any] struct {
 	Cond *sync.Cond
 	Events []*websocket.PreparedMessage
-	// SubscriptionSpecs are opaque to the streaming API; but they are passed through the Streamer
+	// ReadEvents are opaque to the streaming API; but they are passed through the Streamer
 	// to make writing websocket goroutines easier.
-	SubscriptionSpecs []interface{}
+	ReadEvents []R
 	// Closed is set externally, and noticed eventually.
 	Closed bool
 }
 
-func NewStreamer() *Streamer {
+func NewStreamer[R any]() *Streamer[R] {
 	var lock sync.Mutex
 	cond := sync.NewCond(&lock)
 	return &Streamer{ Cond: cond }

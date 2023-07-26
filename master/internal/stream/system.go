@@ -35,7 +35,7 @@ func NewPubSubSystem() PubSubSystem {
 
 func (pss PubSubSystem) Start(ctx context.Context) {
 	// start each publisher
-	go publishLoop(ctx, "stream_trial_chan", newTrialMsgs, pss.TrialPublisher))
+	go publishLoop(ctx, "stream_trial_chan", newTrialMsgs, pss.TrialPublisher)
 }
 
 // Websocket is an Echo websocket endpoint.
@@ -92,14 +92,17 @@ func (pss PubSubSystem) Websocket(socket *websocket.Conn, c echo.Context) error 
 			return nil
 		}
 		if len(subs) > 0 {
+			// convert opqaue []interface{} to usable []SpecMod
+			var mods []SpecMods
 			for _, sub := range subs {
-				mods := sub.(SpecMods)
-				msgs, err := ss.Apply(mods, c.Request().Context())
-				if err != nil {
-					return errors.Wrapf(err, "error modifying subscriptions")
-				}
-				events = append(events, msgs...)
+				mods = append(mods, sub.(SpecMods))
 			}
+			msgs, err := ss.Apply(mods, c.Request().Context())
+			if err != nil {
+				return errors.Wrapf(err, "error modifying subscriptions")
+			}
+			events = append(events, msgs...)
+			// TODO: also append a sync message (or one sync per SpecMods)
 		}
 		// write events to the websocket
 		for _, ev := range events {
@@ -241,7 +244,7 @@ func applyOne[T stream.Event](
 
 // appendInitialScans is a helper function to SubscriptionSet.Apply()
 func appendInitialScans[T stream.Event](
-	msgs []*websocket.PreparedMessage, err error, add *SubscriptionSpec[T], ctx context.Context
+	msgs []*websocket.PreparedMessage, err error, add *SubscriptionSpec[T], ctx context.Context,
 ) ([]*websocket.PreparedMessage, error) {
 	if err != nil || add == nil {
 		return nil, err
@@ -266,13 +269,14 @@ func updateOneSub[T stream.Event](
 
 // Apply takes a list of received SpecMods from the websocket, updates the stream.Subscriptions we
 // have, and returns the result of initial scans for newly-added subscriptions.
-func (ss *SubscriptionSet) Apply(mods []SpecMods, ctx context.Context) (
+func (ss *SubscriptionSet) Apply(subs []interface{}, ctx context.Context) (
 	[]*websocket.PreparedMessage, error,
 ) {
 	trialsDirty := false
 	// expsDirty := false
 	// make all changes to subscriptions first
-	for _, sm := range mods {
+	for _, sub := range subs {
+		sm := sub.(SpecMods)
 		trialsDirty |= applyOne(ss.Trials, sm.Add.Trials, sm.Drop.Trials)
 		// expsDirty |= applyOne(ss.Experiments, sm.Add.Experiments, sm.Drop.Experiments)
 	}
@@ -280,8 +284,11 @@ func (ss *SubscriptionSet) Apply(mods []SpecMods, ctx context.Context) (
 	// do initial scans
 	var msgs []*websocket.PreparedMessage
 	var error err
-	msgs, err = appendInitialScan(msgs, err, sm.Add.Trials ctx)
-	// msgs, err = appendInitialScan(msgs, err, sm.Add.Experiments ctx)
+	for _, sm := range subs {
+		sm := sub.(SpecMods)
+		msgs, err = appendInitialScan(msgs, err, sm.Add.Trials, ctx)
+		// msgs, err = appendInitialScan(msgs, err, sm.Add.Experiments, ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
