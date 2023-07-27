@@ -76,26 +76,29 @@ func newTrialMsgs(since int64, ctx context.Context) (int64, []*TrialMsg, error) 
 type TrialFilterMod struct {
 	TrialIds      []int  `json:"trial_ids"`
 	ExperimentIds []int  `json:"experiment_ids"`
+	Since         int64  `json:"since"`
 }
 
 // When a user submits a new TrialFilterMod, we scrape the database for initial matches.
-func (tss TrialFilterMod) InitialScan(ctx context.Context) (
+func (tfm TrialFilterMod) InitialScan(ctx context.Context) (
 	[]*websocket.PreparedMessage, error,
 ) {
-	if len(tss.TrialIds) == 0 && len(tss.ExperimentIds) == 0 {
+	if len(tfm.TrialIds) == 0 && len(tfm.ExperimentIds) == 0 {
 		return nil, nil
 	}
 	var trialMsgs []*TrialMsg
 	q := db.Bun().NewSelect().Model(&trialMsgs)
-	where := q.Where
-	if len(tss.TrialIds) > 0 {
-		q = where("id in (?)", bun.In(tss.TrialIds))
-		where = q.WhereOr
+
+	// Use WhereSince to build a complex WHERE clause.
+	ws := WhereSince{Since: tfm.Since}
+	if len(tfm.TrialIds) > 0 {
+		ws.Include("id in (?)", bun.In(tfm.TrialIds))
 	}
-	if len(tss.ExperimentIds) > 0 {
-		q = where("experiment_id in (?)", bun.In(tss.ExperimentIds))
-		where = q.WhereOr
+	if len(tfm.ExperimentIds) > 0 {
+		ws.Include("experiment_id in (?)", bun.In(tfm.ExperimentIds))
 	}
+	q = ws.Apply(q)
+
 	err := q.Scan(ctx)
 	if err != nil && errors.Cause(err) != sql.ErrNoRows {
 		fmt.Printf("error: %v\n", err)

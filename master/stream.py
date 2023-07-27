@@ -29,7 +29,7 @@ for event in ws.connect():
         late_sub(ws)
     elif isinstance(event, events.Ready):
         print("ready")
-        ws.send_binary(b'{"add": {"trials": {"trial_ids": [1]}}}')
+        ws.send_binary(b'{"add": {"trials": {"trial_ids": [1], "since": 1000}}}')
     elif isinstance(event, (events.ConnectFail, events.Rejected, events.ProtocolError)):
         raise Exception(f"connection failed: {event}")
     elif isinstance(event, (events.Closing, events.Disconnected)):
