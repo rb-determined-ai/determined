@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"time"
 	"fmt"
+	"encoding/json"
 
 	"github.com/gorilla/websocket"
 	"github.com/pkg/errors"
 	"github.com/uptrace/bun"
+	log "github.com/sirupsen/logrus"
 
 	"github.com/determined-ai/determined/master/internal/db"
 	"github.com/determined-ai/determined/master/pkg/model"
@@ -23,7 +25,7 @@ type TrialMsg struct {
 	ID int                      `bun:"id,pk"`
 	TaskID model.TaskID         `bun:"task_id"`
 	ExperimentID int            `bun:"experiment_id"`
-	RequestID model.RequestID   `bun:"request_id"`
+	RequestID *model.RequestID  `bun:"request_id"`
 	Seed int64                  `bun:"seed"`
 	HParams JsonB               `bun:"hparams"`
 
@@ -79,8 +81,82 @@ type TrialFilterMod struct {
 	Since         int64  `json:"since"`
 }
 
+type TrialsDeletedMsg struct {
+	TrialsDeleted string `json:"trials_deleted"`
+}
+
+func (tdm TrialsDeletedMsg) PreparedMessage() *websocket.PreparedMessage {
+	jbytes, err := json.Marshal(tdm)
+	if err != nil {
+		log.Errorf("error marshaling message for streaming: %v", err.Error())
+		return nil
+	}
+	msg, err := websocket.NewPreparedMessage(websocket.BinaryMessage, jbytes)
+	if err != nil {
+		log.Errorf("error marshaling message for streaming: %v", err.Error())
+		return nil
+	}
+	return msg
+}
+
+func (tfm TrialFilterMod) Startup(known string, ctx context.Context) (
+	[]*websocket.PreparedMessage, error,
+) {
+	var out []*websocket.PreparedMessage
+
+	if len(tfm.TrialIds) == 0 && len(tfm.ExperimentIds) == 0 {
+		// empty subscription: everything known should be returned as deleted
+		tdm := TrialsDeletedMsg{known}
+		out = append(out, tdm.PreparedMessage())
+		return out, nil
+	}
+
+	// step 1: calculate all ids matching this subscription
+	q := db.Bun().NewSelect().Table("trials").Column("id")
+
+	// Ignore tmf.Since, because we want appearances, which might not be have seq > tfm.Since.
+	ws := WhereSince{Since: 0}
+	if len(tfm.TrialIds) > 0 {
+		ws.Include("id in (?)", bun.In(tfm.TrialIds))
+	}
+	if len(tfm.ExperimentIds) > 0 {
+		ws.Include("experiment_id in (?)", bun.In(tfm.ExperimentIds))
+	}
+	q = ws.Apply(q)
+
+	var exist []int64
+	err := q.Scan(ctx, &exist)
+	if err != nil && errors.Cause(err) != sql.ErrNoRows {
+		fmt.Printf("error: %v\n", err)
+		return nil, err
+	}
+
+	// step 2: figure out what was missing and what has appeared
+	missing, appeared, err := processKnown(known, exist)
+	if err != nil {
+		return nil, err
+	}
+
+	// step 3: hydrate appeared IDs into full TrialMsgs
+	var trialMsgs []*TrialMsg
+	if len(appeared) > 0 {
+		err = db.Bun().NewSelect().Model(&trialMsgs).Where("id in (?)", bun.In(appeared)).Scan(ctx)
+		if err != nil && errors.Cause(err) != sql.ErrNoRows {
+			fmt.Printf("error: %v\n", err)
+			return nil, err
+		}
+	}
+
+	// step 4: emit deletions and udpates to the client
+	out = append(out, TrialsDeletedMsg{missing}.PreparedMessage())
+	for _, msg := range trialMsgs {
+		out = append(out, msg.PreparedMessage())
+	}
+	return out, nil
+}
+
 // When a user submits a new TrialFilterMod, we scrape the database for initial matches.
-func (tfm TrialFilterMod) InitialScan(ctx context.Context) (
+func (tfm TrialFilterMod) Modify(ctx context.Context) (
 	[]*websocket.PreparedMessage, error,
 ) {
 	if len(tfm.TrialIds) == 0 && len(tfm.ExperimentIds) == 0 {

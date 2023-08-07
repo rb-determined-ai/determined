@@ -9,10 +9,8 @@ type whereCall struct {
 	args []interface{}
 }
 
-// WhereSince makes it easier to write WHERE clauses of the following forms,
-// which come up frequently in streaming:
-//
-// The optional predicate
+// WhereSince makes it easier to write WHERE clauses of the following forms, which come up
+// frequently in streaming:
 // - WHERE seq > N AND <predicate>
 // - WHERE seq > N AND (<predicate> OR <predicate> ...)
 // - WHERE <predicate>

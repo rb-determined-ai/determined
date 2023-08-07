@@ -15,7 +15,7 @@ def late_sub(ws):
     if _state == 3:
         print("------ updating subscription ------------")
         ws.send_binary(
-            b'{"add": {"trials": {"trial_ids": [2]}}, "drop": {"trials": {"trial_ids": [1]}}}'
+            b'{"add": {"trials": {"trial_ids": [11]}}, "drop": {"trials": {"trial_ids": [1]}}}'
         )
 
 ws = lomond.WebSocket(f"{url}/stream")
@@ -29,7 +29,10 @@ for event in ws.connect():
         late_sub(ws)
     elif isinstance(event, events.Ready):
         print("ready")
-        ws.send_binary(b'{"add": {"trials": {"trial_ids": [1], "since": 1000}}}')
+        ws.send_binary(
+            b'{"subscribe": {"trials": {"trial_ids": [1], "since": 1000}},'
+            b' "known": {"trials": "1,99-110,1000-8000"}}'
+        )
     elif isinstance(event, (events.ConnectFail, events.Rejected, events.ProtocolError)):
         raise Exception(f"connection failed: {event}")
     elif isinstance(event, (events.Closing, events.Disconnected)):
