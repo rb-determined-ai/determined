@@ -129,67 +129,7 @@ func TrialCollectStartupMsgs(known string, spec TrialSubscriptionSpec, ctx conte
 	return out, nil
 }
 
-// When a user submits a new TrialSubscriptionSpec, we scrape the database for initial matches.
-func TrialCollectSubscriptionModMsgs(addSpec TrialSubscriptionSpec, ctx context.Context) (
-	[]*websocket.PreparedMessage, error,
-) {
-	if len(addSpec.TrialIds) == 0 && len(addSpec.ExperimentIds) == 0 {
-		return nil, nil
-	}
-	var trialMsgs []*TrialMsg
-	q := db.Bun().NewSelect().Model(&trialMsgs)
-
-	// Use WhereSince to build a complex WHERE clause.
-	ws := stream.WhereSince{Since: addSpec.Since}
-	if len(addSpec.TrialIds) > 0 {
-		ws.Include("id in (?)", bun.In(addSpec.TrialIds))
-	}
-	if len(addSpec.ExperimentIds) > 0 {
-		ws.Include("experiment_id in (?)", bun.In(addSpec.ExperimentIds))
-	}
-	q = ws.Apply(q)
-
-	err := q.Scan(ctx)
-	if err != nil && errors.Cause(err) != sql.ErrNoRows {
-		fmt.Printf("error: %v\n", err)
-		return nil, err
-	}
-
-	var out []*websocket.PreparedMessage
-	for _, msg := range trialMsgs {
-		out = append(out, msg.UpsertMsg())
-	}
-	return out, nil
-}
-
-type TrialFilterMaker struct {
-	TrialIds      map[int]bool
-	ExperimentIds map[int]bool
-}
-
-func NewTrialFilterMaker() FilterMaker[*TrialMsg, TrialSubscriptionSpec] {
-	return &TrialFilterMaker{make(map[int]bool), make(map[int]bool)}
-}
-
-func (ts *TrialFilterMaker) AddSpec(spec TrialSubscriptionSpec) {
-	for _, id := range spec.TrialIds {
-		ts.TrialIds[id] = true
-	}
-	for _, id := range spec.ExperimentIds {
-		ts.ExperimentIds[id] = true
-	}
-}
-
-func (ts *TrialFilterMaker) DropSpec(spec TrialSubscriptionSpec) {
-	for _, id := range spec.TrialIds {
-		delete(ts.TrialIds, id)
-	}
-	for _, id := range spec.ExperimentIds {
-		delete(ts.ExperimentIds, id)
-	}
-}
-
-func (ts *TrialFilterMaker) MakeFilter() func(*TrialMsg) bool {
+func (ts *TrialSubscriptionSpec) MakeFilter() func(*TrialMsg) bool {
 	// Should this filter even run?
 	if len(ts.TrialIds) == 0 && len(ts.ExperimentIds) == 0 {
 		return nil

@@ -59,36 +59,6 @@ func NewSubscription[T Msg](streamer *Streamer, publisher *Publisher[T]) Subscri
 	return Subscription[T]{Streamer: streamer, Publisher: publisher}
 }
 
-func (s *Subscription[T]) Configure(filter func(T) bool) {
-	if filter == nil && s.filter == nil {
-		// no change, no synchronization needed
-		return
-	}
-	// Changes must be synchronized with our respective publisher.
-	s.Publisher.Lock.Lock()
-	defer s.Publisher.Lock.Unlock()
-	if s.filter == nil {
-		// We weren't connected to the publisher before, but now we are.
-		s.Publisher.Subscriptions = append(s.Publisher.Subscriptions, s)
-	} else if filter == nil {
-		// Delete an existing registration.
-		for i, sub := range s.Publisher.Subscriptions {
-			if sub != s {
-				continue
-			}
-			last := len(s.Publisher.Subscriptions) - 1
-			s.Publisher.Subscriptions[i] = s.Publisher.Subscriptions[last]
-			s.Publisher.Subscriptions = s.Publisher.Subscriptions[:last]
-			break
-		}
-	} else {
-		// Modify an existing registraiton.
-		// (just save filter, below)
-	}
-	// Remember the new filter.
-	s.filter = filter
-}
-
 type Publisher[T Msg] struct {
 	Lock sync.Mutex
 	Subscriptions []*Subscription[T]
