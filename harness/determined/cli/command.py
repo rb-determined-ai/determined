@@ -205,7 +205,7 @@ def list_tasks(args: Namespace) -> None:
         params["workspaceId"] = workspace.id
 
     if not args.all:
-        params["users"] = [authentication.must_cli_auth().get_session_user()]
+        params["users"] = [authentication.must_cli_utp().username]
 
     res = api.get(args.master, api_full_path, params=params).json()[api_path]
 

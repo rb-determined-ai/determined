@@ -17,7 +17,7 @@ from determined.common.api._util import (
     workspace_by_name,
     not_found_errs,
 )
-from determined.common.api.authentication import Authentication, salt_and_hash
+from determined.common.api.authentication import UsernameTokenPair, salt_and_hash
 from determined.common.api.logs import (
     pprint_logs,
     trial_logs,
@@ -34,7 +34,6 @@ from determined.common.api.request import (
     patch,
     post,
     put,
-    ws,
 )
 from determined.common.api.profiler import (
     post_trial_profiler_metrics_batches,

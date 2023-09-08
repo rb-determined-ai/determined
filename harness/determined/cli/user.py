@@ -71,9 +71,9 @@ def log_in_user(parsed_args: Namespace) -> None:
     password = getpass.getpass(message)
 
     token_store = authentication.TokenStore(parsed_args.master)
-    token = authentication.do_login(parsed_args.master, username, password, certs.cli_cert)
-    token_store.set_token(username, token)
-    token_store.set_active(username)
+    utp = authentication.do_login(parsed_args.master, username, password, certs.cli_cert)
+    token_store.set_token(utp.username, utp.token)
+    token_store.set_active(utp.username)
 
 
 def log_out_user(parsed_args: Namespace) -> None:
@@ -116,9 +116,9 @@ def change_password(parsed_args: Namespace) -> None:
     # password change so that the user doesn't have to do so manually.
     if parsed_args.target_user is None:
         token_store = authentication.TokenStore(parsed_args.master)
-        token = authentication.do_login(parsed_args.master, username, password, certs.cli_cert)
-        token_store.set_token(username, token)
-        token_store.set_active(username)
+        utp = authentication.do_login(parsed_args.master, username, password, certs.cli_cert)
+        token_store.set_token(utp.username, utp.token)
+        token_store.set_active(utp.username)
 
 
 @login_sdk_client

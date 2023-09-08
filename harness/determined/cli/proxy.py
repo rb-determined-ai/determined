@@ -279,7 +279,7 @@ def _tunnel_task(sess: Session, task_id: str, port_map: dict[int, int]) -> Itera
         cert_file = cert.bundle
         cert_name = cert.name
 
-    token = authentication.must_cli_auth().get_session_token()
+    token = authentication.must_cli_utp().token
 
     with http_tunnel_listener(master_addr, listeners, cert_file, cert_name, token):
         yield

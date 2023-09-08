@@ -93,7 +93,7 @@ def do_request(
     data: Optional[str] = None,
     headers: Optional[Dict[str, str]] = None,
     authenticated: bool = True,
-    auth: Optional[authentication.Authentication] = None,
+    utp: Optional[authentication.UsernameTokenPair] = None,
     cert: Optional[certs.Cert] = None,
     stream: bool = False,
     timeout: Optional[Union[Tuple, float]] = None,
@@ -107,23 +107,20 @@ def do_request(
     if cert is None:
         cert = certs.cli_cert
 
-    # set the token and username based on this order:
-    # - argument `auth`
+    # set the UsernameTokenPair based on this order:
+    # - argument `utp`
     # - header `Authorization`
-    # - existing cli_auth
+    # - existing cli_utp
     # - allocation_token
 
-    username = ""
-    if auth is not None:
+    if utp is not None:
         if authenticated:
-            h["Authorization"] = "Bearer {}".format(auth.get_session_token())
-        username = auth.get_session_user()
+            h["Authorization"] = "Bearer {}".format(utp.token)
     elif h.get("Authorization") is not None:
         pass
-    elif authentication.cli_auth is not None:
+    elif authentication.cli_utp is not None:
         if authenticated:
-            h["Authorization"] = "Bearer {}".format(authentication.cli_auth.get_session_token())
-        username = authentication.cli_auth.get_session_user()
+            h["Authorization"] = "Bearer {}".format(authentication.cli_utp.token)
     elif authenticated and h.get("Grpc-Metadata-x-allocation-token") is None:
         allocation_token = authentication.get_allocation_token()
         if allocation_token:
@@ -171,9 +168,9 @@ def do_request(
             return ""
 
     if r.status_code == 403:
-        raise errors.ForbiddenException(username=username, message=_get_error_str(r))
+        raise errors.ForbiddenException(message=_get_error_str(r))
     if r.status_code == 401:
-        raise errors.UnauthenticatedException(username=username)
+        raise errors.UnauthenticatedException()
     elif r.status_code == 404:
         raise errors.NotFoundException(_get_error_str(r))
     elif r.status_code >= 300:
@@ -188,7 +185,7 @@ def get(
     params: Optional[Dict[str, Any]] = None,
     headers: Optional[Dict[str, str]] = None,
     authenticated: bool = True,
-    auth: Optional[authentication.Authentication] = None,
+    utp: Optional[authentication.UsernameTokenPair] = None,
     cert: Optional[certs.Cert] = None,
     stream: bool = False,
     timeout: Optional[Union[Tuple, float]] = None,
@@ -203,7 +200,7 @@ def get(
         params=params,
         headers=headers,
         authenticated=authenticated,
-        auth=auth,
+        utp=utp,
         cert=cert,
         stream=stream,
     )
@@ -215,7 +212,7 @@ def delete(
     params: Optional[Dict[str, Any]] = None,
     headers: Optional[Dict[str, str]] = None,
     authenticated: bool = True,
-    auth: Optional[authentication.Authentication] = None,
+    utp: Optional[authentication.UsernameTokenPair] = None,
     cert: Optional[certs.Cert] = None,
     timeout: Optional[Union[Tuple, float]] = None,
 ) -> requests.Response:
@@ -229,7 +226,7 @@ def delete(
         params=params,
         headers=headers,
         authenticated=authenticated,
-        auth=auth,
+        utp=utp,
         cert=cert,
         timeout=timeout,
     )
@@ -241,7 +238,7 @@ def post(
     json: Any = None,
     headers: Optional[Dict[str, str]] = None,
     authenticated: bool = True,
-    auth: Optional[authentication.Authentication] = None,
+    utp: Optional[authentication.UsernameTokenPair] = None,
     cert: Optional[certs.Cert] = None,
     timeout: Optional[Union[Tuple, float]] = None,
 ) -> requests.Response:
@@ -255,7 +252,7 @@ def post(
         json=json,
         headers=headers,
         authenticated=authenticated,
-        auth=auth,
+        utp=utp,
         cert=cert,
         timeout=timeout,
     )
@@ -267,7 +264,7 @@ def patch(
     json: Dict[str, Any],
     headers: Optional[Dict[str, str]] = None,
     authenticated: bool = True,
-    auth: Optional[authentication.Authentication] = None,
+    utp: Optional[authentication.UsernameTokenPair] = None,
     cert: Optional[certs.Cert] = None,
     timeout: Optional[Union[Tuple, float]] = None,
 ) -> requests.Response:
@@ -281,7 +278,7 @@ def patch(
         json=json,
         headers=headers,
         authenticated=authenticated,
-        auth=auth,
+        utp=utp,
         cert=cert,
         timeout=timeout,
     )
@@ -293,7 +290,7 @@ def put(
     json: Optional[Dict[str, Any]] = None,
     headers: Optional[Dict[str, str]] = None,
     authenticated: bool = True,
-    auth: Optional[authentication.Authentication] = None,
+    utp: Optional[authentication.UsernameTokenPair] = None,
     cert: Optional[certs.Cert] = None,
     timeout: Optional[Union[Tuple, float]] = None,
 ) -> requests.Response:
@@ -307,7 +304,7 @@ def put(
         json=json,
         headers=headers,
         authenticated=authenticated,
-        auth=auth,
+        utp=utp,
         cert=cert,
         timeout=timeout,
     )
@@ -357,15 +354,3 @@ class WebSocket:
     ) -> None:
         if not self.socket.is_closed:
             self.socket.close()
-
-
-def ws(host: str, path: str) -> WebSocket:
-    """
-    Connect to a web socket at the remote API.
-    """
-    import lomond
-
-    websocket = lomond.WebSocket(maybe_upgrade_ws_scheme(make_url(host, path)))
-    token = authentication.must_cli_auth().get_session_token()
-    websocket.add_header("Authorization".encode(), "Bearer {}".format(token).encode())
-    return WebSocket(websocket)

@@ -23,13 +23,12 @@ from determined.common.declarative_argparse import Arg, Cmd
 
 @authentication.required
 def token(_: Namespace) -> None:
-    token = authentication.must_cli_auth().get_session_token()
-    print(token)
+    print(authentication.must_cli_utp().token)
 
 
 @authentication.required
 def curl(args: Namespace) -> None:
-    assert authentication.cli_auth is not None
+    assert authentication.cli_utp is not None
     if shutil.which("curl") is None:
         print(colored("curl is not installed on this machine", "red"))
         sys.exit(1)
@@ -45,7 +44,7 @@ def curl(args: Namespace) -> None:
         "curl",
         request.make_url_new(args.master, args.path),
         "-H",
-        f"Authorization: Bearer {authentication.cli_auth.get_session_token()}",
+        f"Authorization: Bearer {authentication.cli_utp.token}",
         "-s",
     ]
     if args.curl_args:

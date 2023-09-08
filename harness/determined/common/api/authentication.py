@@ -38,6 +38,19 @@ class UsernameTokenPair:
         self.token = token
 
 
+def do_login(
+    master_address: str,
+    username: str,
+    password: str,
+    cert: Optional[certs.Cert] = None,
+) -> UsernameTokenPair:
+    password = api.salt_and_hash(password)
+    unauth_session = api.Session(user=username, master=master_address, utp=None, cert=cert)
+    login = bindings.v1LoginRequest(username=username, password=password, isHashed=True)
+    r = bindings.post_Login(session=unauth_session, body=login)
+    return UsernameTokenPair(username, r.token)
+
+
 def default_load_user_password(
     requested_user: Optional[str],
     password: Optional[str],
@@ -62,126 +75,59 @@ def default_load_user_password(
     return token_store.get_active_user(), password
 
 
-class Authentication:
-    def __init__(
-        self,
-        master_address: Optional[str] = None,
-        requested_user: Optional[str] = None,
-        password: Optional[str] = None,
-        cert: Optional[certs.Cert] = None,
-    ) -> None:
-        self.master_address = master_address or util.get_default_master_address()
-        self.token_store = TokenStore(self.master_address)
-
-        self.session = self._init_session(requested_user, password, cert)
-
-    def _init_session(
-        self,
-        requested_user: Optional[str],
-        password: Optional[str],
-        cert: Optional[certs.Cert],
-    ) -> UsernameTokenPair:
-        session_user, password = default_load_user_password(
-            requested_user, password, self.token_store
-        )
-
-        # For login, we allow falling back to the default username.
-        if not session_user:
-            session_user = constants.DEFAULT_DETERMINED_USER
-        assert session_user is not None
-
-        token = self.token_store.get_token(session_user)
-        if token is not None and not _is_token_valid(self.master_address, token, cert):
-            self.token_store.drop_user(session_user)
-            token = None
-
-        if (
-            token is None
-            and util.get_det_username_from_env() is not None
-            and util.get_det_user_token_from_env() is not None
-        ):
-            session_user = util.get_det_username_from_env()
-            assert session_user
-            token = util.get_det_user_token_from_env()
-
-        if token is not None:
-            return UsernameTokenPair(session_user, token)
-
-        fallback_to_default = password is None and session_user == constants.DEFAULT_DETERMINED_USER
-        if fallback_to_default:
-            password = constants.DEFAULT_DETERMINED_PASSWORD
-        elif session_user is None:
-            session_user = input("Username: ")
-
-        if password is None:
-            password = getpass.getpass("Password for user '{}': ".format(session_user))
-
-        try:
-            token = do_login(self.master_address, session_user, password, cert)
-        except api.errors.ForbiddenException:
-            if fallback_to_default:
-                raise api.errors.UnauthenticatedException(username=session_user)
-            raise
-
-        self.token_store.set_token(session_user, token)
-
-        return UsernameTokenPair(session_user, token)
-
-    def is_user_active(self, username: str) -> bool:
-        return self.token_store.get_active_user() == username
-
-    def get_session_user(self) -> str:
-        """
-        Returns the session user for the current session. If there is no active
-        session, then an UnauthenticatedException will be raised.
-        """
-        return self.session.username
-
-    def get_session_token(self, must: bool = True) -> str:
-        """
-        Returns the authentication token for the session user. If there is no
-        active session, then an UnauthenticatedException will be raised.
-        """
-        if self.session is None:
-            if must:
-                raise api.errors.UnauthenticatedException(username="")
-            else:
-                return ""
-        return self.session.token
-
-
-def do_login(
-    master_address: str,
-    username: str,
-    password: str,
+def authenticate(
+    master_address: Optional[str] = None,
+    requested_user: Optional[str] = None,
+    password: Optional[str] = None,
     cert: Optional[certs.Cert] = None,
-) -> str:
-    password = api.salt_and_hash(password)
-    unauth_session = api.Session(user=username, master=master_address, auth=None, cert=cert)
-    login = bindings.v1LoginRequest(username=username, password=password, isHashed=True)
-    r = bindings.post_Login(session=unauth_session, body=login)
-    token = r.token
+) -> UsernameTokenPair:
+    master_address = master_address or util.get_default_master_address()
+    token_store = TokenStore(master_address)
 
-    return token
+    user, password = default_load_user_password(requested_user, password, token_store)
 
+    # For login, we allow falling back to the default username.
+    if not user:
+        user = constants.DEFAULT_DETERMINED_USER
+    assert user is not None
 
-class LogoutAuthentication(Authentication):
-    """
-    An api-compatible Authentication object that is basically exactly a UserTokenPair.
+    token = token_store.get_token(user)
+    if token is not None and not _is_token_valid(master_address, token, cert):
+        token_store.drop_user(user)
+        token = None
 
-    TODO(MLG-215): delete Authentication class and write a function that returns a UsernameTokenPair
-    in its place, and let do_request() take UsernameTokenPair as input.
-    """
+    if (
+        token is None
+        and util.get_det_username_from_env() is not None
+        and util.get_det_user_token_from_env() is not None
+    ):
+        user = util.get_det_username_from_env()
+        assert user
+        token = util.get_det_user_token_from_env()
 
-    def __init__(self, session_user: str, session_token: str) -> None:
-        self.session_user = session_user
-        self.session_token = session_token
+    if token is not None:
+        return UsernameTokenPair(user, token)
 
-    def get_session_user(self) -> str:
-        return self.session_user
+    fallback_to_default = password is None and user == constants.DEFAULT_DETERMINED_USER
+    if fallback_to_default:
+        password = constants.DEFAULT_DETERMINED_PASSWORD
+    elif user is None:
+        user = input("Username: ")
 
-    def get_session_token(self, must: bool = True) -> str:
-        return self.session_token
+    if password is None:
+        password = getpass.getpass("Password for user '{}': ".format(user))
+
+    try:
+        utp = do_login(master_address, user, password, cert)
+        user, token = utp.username, utp.token
+    except api.errors.ForbiddenException:
+        if fallback_to_default:
+            raise api.errors.UnauthenticatedException()
+        raise
+
+    token_store.set_token(user, token)
+
+    return UsernameTokenPair(user, token)
 
 
 def logout(
@@ -196,21 +142,21 @@ def logout(
     master_address = master_address or util.get_default_master_address()
     token_store = TokenStore(master_address)
 
-    session_user, _ = default_load_user_password(requested_user, None, token_store)
+    user, _ = default_load_user_password(requested_user, None, token_store)
     # Don't log out of DEFAULT_DETERMINED_USER when it's not specified and not the active user.
 
-    if session_user is None:
+    if user is None:
         return
 
-    session_token = token_store.get_token(session_user)
+    token = token_store.get_token(user)
 
-    if session_token is None:
+    if token is None:
         return
 
-    token_store.drop_user(session_user)
+    token_store.drop_user(user)
 
-    auth = LogoutAuthentication(session_user, session_token)
-    sess = api.Session(user=session_user, master=master_address, auth=auth, cert=cert)
+    utp = UsernameTokenPair(user, token)
+    sess = api.Session(user=user, master=master_address, utp=utp, cert=cert)
     try:
         bindings.post_Logout(sess)
     except (api.errors.UnauthenticatedException, api.errors.APIException):
@@ -303,7 +249,7 @@ class TokenStore:
         with self._persistent_store() as substore:
             tokens = substore.setdefault("tokens", {})
             if username not in tokens:
-                raise api.errors.UnauthenticatedException(username=username)
+                raise api.errors.UnauthenticatedException()
             substore["active_user"] = username
 
     @contextlib.contextmanager
@@ -459,8 +405,8 @@ def validate_token_store_v1(store: Any) -> bool:
     return True
 
 
-# cli_auth is the process-wide authentication used for api calls originating from the cli.
-cli_auth = None  # type: Optional[Authentication]
+# cli_utp is the process-wide UsernameTokenPair used for api calls originating from the cli.
+cli_utp = None  # type: Optional[UsernameTokenPair]
 
 
 def required(func: Callable[[argparse.Namespace], Any]) -> Callable[..., Any]:
@@ -470,14 +416,14 @@ def required(func: Callable[[argparse.Namespace], Any]) -> Callable[..., Any]:
 
     @functools.wraps(func)
     def f(namespace: argparse.Namespace) -> Any:
-        global cli_auth
-        cli_auth = Authentication(namespace.master, namespace.user)
+        global cli_utp
+        cli_utp = authenticate(namespace.master, namespace.user)
         return func(namespace)
 
     return f
 
 
-def must_cli_auth() -> Authentication:
-    if not cli_auth:
-        raise api.errors.UnauthenticatedException(username="")
-    return cli_auth
+def must_cli_utp() -> UsernameTokenPair:
+    if not cli_utp:
+        raise api.errors.UnauthenticatedException()
+    return cli_utp

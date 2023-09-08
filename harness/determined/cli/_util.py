@@ -99,7 +99,7 @@ def setup_session(args: argparse.Namespace) -> api.Session:
     cert = certs.default_load(master_url)
     retry = api.default_retry()
 
-    return api.Session(master_url, args.user, authentication.cli_auth, cert, retry)
+    return api.Session(master_url, args.user, authentication.cli_utp, cert, retry)
 
 
 def require_feature_flag(feature_flag: str, error_message: str) -> Callable[..., Any]:

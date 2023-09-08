@@ -78,7 +78,7 @@ def list_project_experiments(args: Namespace) -> None:
         "sortBy": bindings.v1GetExperimentsRequestSortBy[args.sort_by.upper()],
     }
     if not args.all:
-        kwargs["users"] = [authentication.must_cli_auth().get_session_user()]
+        kwargs["users"] = [authentication.must_cli_utp().username]
         kwargs["archived"] = "false"
 
     all_experiments: List[bindings.v1Experiment] = []

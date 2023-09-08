@@ -682,7 +682,7 @@ def list_experiments(args: Namespace) -> None:
             offset=offset,
             archived=None if args.all else False,
             limit=args.limit,
-            users=None if args.all else [authentication.must_cli_auth().get_session_user()],
+            users=None if args.all else [authentication.must_cli_utp().username],
         )
 
     resps = api.read_paginated(get_with_offset, offset=args.offset, pages=args.pages)

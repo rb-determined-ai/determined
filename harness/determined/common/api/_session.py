@@ -12,13 +12,13 @@ class Session:
         self,
         master: Optional[str],
         user: Optional[str],
-        auth: Optional[authentication.Authentication],
+        utp: Optional[authentication.UsernameTokenPair],
         cert: Optional[certs.Cert],
         max_retries: Optional[urllib3.util.retry.Retry] = None,
     ) -> None:
         self._master = master or util.get_default_master_address()
         self._user = user
-        self._auth = auth
+        self._utp = utp
         self._cert = cert
         self._max_retries = max_retries
 
@@ -40,7 +40,7 @@ class Session:
             params=params,
             json=json,
             data=data,
-            auth=self._auth,
+            utp=self._utp,
             cert=self._cert,
             headers=headers,
             timeout=timeout,
@@ -106,7 +106,7 @@ class Session:
         return type(self)(
             master=self._master,
             user=self._user,
-            auth=self._auth,
+            utp=self._utp,
             cert=self._cert,
             max_retries=retry,
         )
