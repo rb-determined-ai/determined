@@ -254,11 +254,11 @@ UseEnv = Use("user", "env_token")
     ],
 )
 @mock.patch("determined.common.api.authentication._is_token_valid")
-@mock.patch("determined.common.api.authentication.do_login")
+@mock.patch("determined.common.api.authentication.login")
 @mock.patch("getpass.getpass")
 def test_login_scenarios(
     mock_getpass: mock.MagicMock,
-    mock_do_login: mock.MagicMock,
+    mock_login: mock.MagicMock,
     mock_is_token_valid: mock.MagicMock,
     scenario_set: Login,
 ) -> None:
@@ -268,12 +268,12 @@ def test_login_scenarios(
     def _is_token_valid(master_url: str, token: str, cert: Any) -> bool:
         return token in ["cache", "env_token"]
 
-    def do_login(*_: Any) -> str:
-        return "new"
+    def login(master_address: str, username: str, *_: Any) -> authentication.UsernameTokenPair:
+        return authentication.UsernameTokenPair(username, "new")
 
     mock_getpass.side_effect = getpass
     mock_is_token_valid.side_effect = _is_token_valid
-    mock_do_login.side_effect = do_login
+    mock_login.side_effect = login
 
     for scenario in scenario_set.scenarios():
         with contextlib.ExitStack() as es:
@@ -298,12 +298,12 @@ def test_login_scenarios(
             # function will never show evidence that it checked the environment.  However, for the
             # remainder of the authentication flow, it never matters again that the user came from
             # the TokenStore.get_active_user(), so if we modeled that in the table it wouldn't
-            # actually increase code coverage for the Authentication object, which is what we are
-            # focusing on.
+            # actually increase code coverage for the logout_with_cache function, which is what we
+            # are focusing on.
             mts.get_active_user(retval=scenario.cache and "user")
 
             try:
-                auth = authentication.Authentication(
+                utp = authentication.login_with_cache(
                     "master_url", scenario.req_user, scenario.req_pass, None
                 )
 
@@ -314,12 +314,12 @@ def test_login_scenarios(
                             [mock.call("master_url", exp.token, None)]
                         )
                     elif isinstance(exp, DoLogin):
-                        mock_do_login.assert_has_calls(
+                        mock_login.assert_has_calls(
                             [mock.call("master_url", exp.username, exp.password, None)]
                         )
                     elif isinstance(exp, Use):
-                        assert auth.session.username == exp.user
-                        assert auth.session.token == exp.token
+                        assert utp.username == exp.user
+                        assert utp.token == exp.token
                     else:
                         raise ValueError(f"unexpected result: {exp}")
 
@@ -327,7 +327,7 @@ def test_login_scenarios(
                 if not any(isinstance(exp, Check) for exp in scenario_set.expected):
                     mock_is_token_valid.assert_not_called()
                 if not any(isinstance(exp, DoLogin) for exp in scenario_set.expected):
-                    mock_do_login.assert_not_called()
+                    mock_login.assert_not_called()
 
             except Exception as e:
                 raise RuntimeError(
@@ -420,6 +420,36 @@ def test_logout(scenario_set: Logout) -> None:
             else:
                 cmd = ["user", "logout"]
             cli.main(cmd)
+
+
+def test_logout_all() -> None:
+    with util.MockTokenStore(strict=True) as mts:
+        with responses.RequestsMock(
+            registry=registries.OrderedRegistry, assert_all_requests_are_fired=True
+        ) as rsps:
+            # Every active user should get logged out.
+            mts.get_all_users(retval=["u1", "u2"])
+
+            util.expect_get_info(rsps)
+
+            mts.get_token("u1", retval="t1")
+            rsps.post(
+                f"{MOCK_MASTER_URL}/api/v1/auth/logout",
+                status=200,
+                match=[matchers.header_matcher({"Authorization": "Bearer t1"})],
+            )
+            mts.drop_user("u1")
+
+            # Unauthenticated errors are ignored during logout.
+            mts.get_token("u2", retval="t2")
+            rsps.post(
+                f"{MOCK_MASTER_URL}/api/v1/auth/logout",
+                status=401,
+                match=[matchers.header_matcher({"Authorization": "Bearer t2"})],
+            )
+            mts.drop_user("u2")
+
+            cli.main(["user", "logout", "--all"])
 
 
 def test_auth_json_v0_upgrade() -> None:

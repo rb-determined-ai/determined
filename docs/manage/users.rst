@@ -226,6 +226,14 @@ user and group on an agent can be configured in the ``master.yaml`` file located
        group: root
        gid: 0
 
+.. note::
+
+   A writable ``HOME`` directory is required by all Determined tasks. Out of the box, all official
+   Determined images contain a tool called ``libnss_determined`` that injects users into the
+   container at runtime. If you are building custom images from a base image other than one of
+   Determined's images, you may need to either include ``libnss_determined`` in your custom image or
+   find an equivalent solution for injecting users into the container at runtime.
+
 .. _run-unprivileged-tasks:
 
 ***********************************
@@ -235,8 +243,8 @@ user and group on an agent can be configured in the ``master.yaml`` file located
 Some administrators of Determined may wish to run tasks as unprivileged users by default. In Linux,
 unprivileged processes are sometimes run under the `nobody
 <https://en.wikipedia.org/wiki/Nobody_(username)>`_ user, which has very few privileges. However,
-the ``nobody`` user does not have a writable ``HOME`` directory, which causes problems for some
-common tools like ``gsutil``.
+the ``nobody`` user does not have a writable ``HOME`` directory, which is a requirement for tasks in
+Determined.
 
 For convenience, the default Determined environments contain an unprivileged user named
 ``det-nobody``, which does have a writable ``HOME`` directory. The ``det-nobody`` user is a suitable

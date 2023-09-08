@@ -38,7 +38,8 @@ def wait_for_master_url(
     try:
         while time.time() - start_time < timeout:
             try:
-                r = api.get(master_url, "info", authenticated=False, cert=cert)
+                sess = api.UnauthSession(master_url, cert=cert)
+                r = sess.get("info")
                 if r.status_code == requests.codes.ok:
                     return
             except api.errors.MasterNotFoundException:

@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/determined-ai/determined/master/internal/rm/tasklist"
 	"github.com/determined-ai/determined/master/internal/sproto"
 	"github.com/determined-ai/determined/master/internal/task"
+	"github.com/determined-ai/determined/master/internal/user"
 	"github.com/determined-ai/determined/master/pkg/logger"
 	"github.com/determined-ai/determined/master/pkg/model"
 	"github.com/determined-ai/determined/master/pkg/protoutils/protoconverter"
@@ -64,6 +66,11 @@ func runCheckpointGCTask(
 	}
 	taskSpec.TaskContainerDefaults = tcd
 
+	userSessionToken, err := user.StartSession(context.TODO(), owner)
+	if err != nil {
+		return errors.Wrapf(err, "unable to create user session for checkpoint gc")
+	}
+	taskSpec.UserSessionToken = userSessionToken
 	taskSpec.AgentUserGroup = agentUserGroup
 	taskSpec.Owner = owner
 

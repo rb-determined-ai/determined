@@ -8,16 +8,15 @@ from termcolor import colored
 from determined import cli
 from determined.cli import command, render, task
 from determined.common import api
-from determined.common.api import authentication
 from determined.common.declarative_argparse import Arg, Cmd, Group
 
 
-@authentication.required
 def run_command(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     config = command.parse_config(args.config_file, args.entrypoint, args.config, args.volume)
     workspace_id = cli.workspace.get_workspace_id_from_args(args)
     resp = command.launch_command(
-        args.master,
+        sess,
         "api/v1/commands",
         config,
         args.template,
@@ -33,7 +32,7 @@ def run_command(args: Namespace) -> None:
     render.report_job_launched("command", resp["id"])
 
     try:
-        logs = api.task_logs(cli.setup_session(args), resp["id"], follow=True)
+        logs = api.task_logs(sess, resp["id"], follow=True)
         api.pprint_logs(logs)
     finally:
         print(

@@ -7,7 +7,7 @@ from termcolor import colored
 from determined import cli
 from determined.cli import command, render
 from determined.common import api
-from determined.common.api import authentication, bindings
+from determined.common.api import bindings
 from determined.common.api.bindings import v1AllocationSummary
 from determined.common.declarative_argparse import Arg, Cmd, Group
 
@@ -69,19 +69,19 @@ def render_tasks(args: Namespace, tasks: Dict[str, v1AllocationSummary]) -> None
     render.tabulate_or_csv(headers, values, args.csv)
 
 
-@authentication.required
 def list_tasks(args: Namespace) -> None:
-    r = bindings.get_GetTasks(cli.setup_session(args))
+    sess = cli.setup_session(args)
+    r = bindings.get_GetTasks(sess)
     tasks = r.allocationIdToSummary or {}
     render_tasks(args, tasks)
 
 
-@authentication.required
 def logs(args: Namespace) -> None:
-    task_id = cast(str, command.expand_uuid_prefixes(args, args.task_id))
+    sess = cli.setup_session(args)
+    task_id = cast(str, command.expand_uuid_prefixes(sess, args, args.task_id))
     try:
         logs = api.task_logs(
-            cli.setup_session(args),
+            sess,
             task_id,
             head=args.head,
             tail=args.tail,

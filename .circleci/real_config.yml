@@ -626,6 +626,7 @@ commands:
           command: |
             pytest -vv -s \
             -m <<parameters.mark>> \
+            --no-compare-stats \
             --det-version="<<parameters.det-version>>"
 
   deploy-aws-cluster:
@@ -2747,6 +2748,7 @@ workflows:
           devcluster-config: agent-no-connection.devcluster.yaml
           target-stage: agent
           wait-for-master: false
+          extra-pytest-flags: "--no-compare-stats"
 
       - deploy:
           name: deploy-latest-master-cluster
