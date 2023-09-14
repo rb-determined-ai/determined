@@ -9,6 +9,13 @@ from determined.common.api._util import (
     wait_for_ntsc_state,
     task_is_ready,
     NTSC_Kind,
+    role_name_to_role_id,
+    create_assignment_request,
+    assign_role,
+    usernames_to_user_ids,
+    group_name_to_group_id,
+    workspace_by_name,
+    not_found_errs,
 )
 from determined.common.api.authentication import Authentication, salt_and_hash
 from determined.common.api.logs import (

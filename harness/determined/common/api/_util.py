@@ -1,5 +1,5 @@
 import enum
-from typing import Callable, Iterator, Optional, Set, Tuple, TypeVar, Union
+from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple, TypeVar, Union
 
 import urllib3
 
@@ -135,3 +135,130 @@ def task_is_ready(
 
     err_msg = util.wait_for(_task_is_done_loading, timeout=300, interval=1)
     return err_msg
+
+
+def role_name_to_role_id(session: api.Session, role_name: str) -> int:
+    # XXX: is 499 guaranteed to be enough?  Why not read_paginated?
+    req = bindings.v1ListRolesRequest(limit=499, offset=0)
+    resp = bindings.post_ListRoles(session=session, body=req)
+    for r in resp.roles:
+        if r.name == role_name and r.roleId is not None:
+            return r.roleId
+    raise api.errors.BadRequestException(f"could not find role name {role_name}")
+
+
+def create_assignment_request(
+    session: api.Session,
+    role_name: str,
+    workspace_name: Optional[str] = None,
+    username_to_assign: Optional[str] = None,
+    group_name_to_assign: Optional[str] = None,
+) -> Tuple[List[bindings.v1UserRoleAssignment], List[bindings.v1GroupRoleAssignment]]:
+    if (username_to_assign is None) == (group_name_to_assign is None):
+        # XXX: very weird that we use api.errors.BadRequestException here!
+        raise api.errors.BadRequestException(
+            "must provide exactly one of --username-to-assign or --group-name-to-assign"
+        )
+
+    role = bindings.v1Role(roleId=role_name_to_role_id(session, role_name))
+
+    workspace_id = None
+    if workspace_name is not None:
+        workspace_id = workspace_by_name(session, workspace_name).id
+    role_assign = bindings.v1RoleAssignment(role=role, scopeWorkspaceId=workspace_id)
+
+    if username_to_assign is not None:
+        user_id = usernames_to_user_ids(session, [username_to_assign])[0]
+        return [bindings.v1UserRoleAssignment(userId=user_id, roleAssignment=role_assign)], []
+
+    assert group_name_to_assign is not None
+    group_id = group_name_to_group_id(session, group_name_to_assign)
+    return [], [bindings.v1GroupRoleAssignment(groupId=group_id, roleAssignment=role_assign)]
+
+
+def assign_role(
+    session: api.Session,
+    role_name: str,
+    workspace_name: Optional[str] = None,
+    username_to_assign: Optional[str] = None,
+    group_name_to_assign: Optional[str] = None,
+) -> None:
+    user_assign, group_assign = create_assignment_request(
+        session=session,
+        role_name=role_name,
+        workspace_name=workspace_name,
+        username_to_assign=username_to_assign,
+        group_name_to_assign=group_name_to_assign,
+    )
+    req = bindings.v1AssignRolesRequest(
+        userRoleAssignments=user_assign, groupRoleAssignments=group_assign
+    )
+    bindings.post_AssignRoles(session, body=req)
+
+    scope = " globally"
+    if workspace_name:
+        scope = f" to workspace {workspace_name}"
+    if len(user_assign) > 0:
+        role_id = user_assign[0].roleAssignment.role.roleId
+        print(
+            f"assigned role '{role_name}' with ID {role_id} "
+            + f"to user '{username_to_assign}' with ID {user_assign[0].userId}{scope}"
+        )
+    else:
+        role_id = group_assign[0].roleAssignment.role.roleId
+        print(
+            f"assigned role '{role_name}' with ID {role_id} "
+            + f"to group '{group_name_to_assign}' with ID {group_assign[0].groupId}{scope}"
+        )
+
+
+def usernames_to_user_ids(session: api.Session, usernames: List[str]) -> List[int]:
+    usernames_to_ids: Dict[str, Optional[int]] = {u: None for u in usernames}
+    users = bindings.get_GetUsers(session).users or []
+    for user in users:
+        if user.username in usernames_to_ids:
+            usernames_to_ids[user.username] = user.id
+
+    missing_users = []
+    user_ids = []
+    for username, user_id in usernames_to_ids.items():
+        if user_id is None:
+            missing_users.append(username)
+        else:
+            user_ids.append(user_id)
+
+    if missing_users:
+        raise api.errors.BadRequestException(
+            f"could not find users for usernames {', '.join(missing_users)}"
+        )
+    return user_ids
+
+
+def group_name_to_group_id(session: api.Session, group_name: str) -> int:
+    body = bindings.v1GetGroupsRequest(name=group_name, limit=1, offset=0)
+    resp = bindings.post_GetGroups(session, body=body)
+    groups = resp.groups
+    if groups is None or len(groups) != 1 or groups[0].group.groupId is None:
+        raise api.errors.BadRequestException(f"could not find user group name {group_name}")
+    return groups[0].group.groupId
+
+
+def workspace_by_name(session: api.Session, name: str) -> bindings.v1Workspace:
+    assert name, "workspace name cannot be empty"
+    w = bindings.get_GetWorkspaces(session, nameCaseSensitive=name).workspaces
+    assert len(w) <= 1, "workspace name is assumed to be unique."
+    if len(w) == 0:
+        raise not_found_errs("workspace", name, session)
+    return bindings.get_GetWorkspace(session, id=w[0].id).workspace
+
+
+# not_found_errs mirrors NotFoundErrs from the golang api/errors.go. In the cases where
+# Python errors override the golang errors, this ensures the error messages stay consistent.
+def not_found_errs(
+    category: str, name: str, session: api.Session
+) -> api.errors.BadRequestException:
+    resp = bindings.get_GetMaster(session)
+    msg = f"{category} '{name}' not found"
+    if not resp.to_json().get("rbacEnabled"):
+        return api.errors.NotFoundException(msg)
+    return api.errors.NotFoundException(msg + ", please check your permissions.")
