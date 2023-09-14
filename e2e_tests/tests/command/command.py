@@ -8,7 +8,6 @@ import requests
 
 from determined.common import api
 from determined.common.api import authentication, certs, task_logs
-from tests import api_utils
 from tests import config as conf
 
 
@@ -88,10 +87,8 @@ def interactive_command(*args: str) -> Iterator[_InteractiveCommandProcess]:
 
 
 def get_num_active_commands() -> int:
-    # TODO: refactor tests to not use cli singleton auth.
-    certs.cli_cert = certs.default_load(conf.make_master_url())
-    authentication.cli_auth = authentication.Authentication(conf.make_master_url())
-    r = api.get(conf.make_master_url(), "api/v1/commands")
+    sess = conf.user_session()
+    r = sess.get("api/v1/commands")
     assert r.status_code == requests.codes.ok, r.text
 
     return len(
@@ -108,9 +105,8 @@ def get_num_active_commands() -> int:
 
 
 def get_command(command_id: str) -> Any:
-    certs.cli_cert = certs.default_load(conf.make_master_url())
-    authentication.cli_auth = authentication.Authentication(conf.make_master_url())
-    r = api.get(conf.make_master_url(), "api/v1/commands/" + command_id)
+    sess = conf.user_session()
+    r = sess.get("api/v1/commands/" + command_id)
     assert r.status_code == requests.codes.ok, r.text
     return r.json()["command"]
 
@@ -134,6 +130,6 @@ def get_command_config(command_type: str, task_id: str) -> str:
 
 
 def print_command_logs(task_id: str) -> bool:
-    for tl in task_logs(api_utils.determined_test_session(), task_id):
+    for tl in task_logs(conf.user_session(), task_id):
         print(tl.message)
     return True

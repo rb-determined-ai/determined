@@ -5,9 +5,9 @@ import pytest
 
 from determined.common import api
 from determined.common.api import NTSC_Kind, bindings, get_ntsc_details, wait_for_ntsc_state
+from tests import api_utils
 from tests import command as cmd
-from tests.api_utils import determined_test_session, kill_ntsc, launch_ntsc
-from tests.cluster.test_users import ADMIN_CREDENTIALS
+from tests import config as conf
 
 
 @pytest.mark.slow
@@ -25,13 +25,13 @@ def test_basic_notebook_start_and_kill() -> None:
 
 @pytest.mark.e2e_cpu
 def test_notebook_proxy() -> None:
-    session = determined_test_session(ADMIN_CREDENTIALS)
+    session = conf.admin_session()
 
     def get_proxy(session: api.Session, task_id: str) -> None:
         session.get(f"proxy/{task_id}/")
 
     typ = NTSC_Kind.notebook
-    created_id = launch_ntsc(session, 1, typ).id
+    created_id = api_utils.launch_ntsc(session, 1, typ).id
     print(f"created {typ} {created_id}")
     wait_for_ntsc_state(
         session,
@@ -42,10 +42,10 @@ def test_notebook_proxy() -> None:
     )
     deets = get_ntsc_details(session, typ, created_id)
     assert deets.state == bindings.taskv1State.RUNNING, f"{typ} should be running"
-    err = api.task_is_ready(determined_test_session(ADMIN_CREDENTIALS), created_id)
+    err = api.task_is_ready(conf.admin_session(), created_id)
     assert err is None, f"{typ} should be ready {err}"
     print(deets)
     try:
         get_proxy(session, created_id)
     finally:
-        kill_ntsc(session, typ, created_id)
+        api_utils.kill_ntsc(session, typ, created_id)

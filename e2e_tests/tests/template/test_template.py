@@ -69,7 +69,7 @@ def setup_template_test(
     workspace_id: Optional[int] = None,
     name: str = "template",
 ) -> Tuple[Session, bindings.v1Template]:
-    session = api_utils.determined_test_session() if session is None else session
+    session = conf.user_session() if session is None else session
     tpl = bindings.v1Template(
         name=api_utils.get_random_string(),
         config=conf.load_config(conf.fixtures_path(f"templates/{name}.yaml")),

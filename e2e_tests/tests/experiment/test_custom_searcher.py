@@ -12,7 +12,6 @@ from determined import searcher
 from determined.common import yaml
 from determined.common.api import bindings
 from determined.experimental import client
-from tests import api_utils
 from tests import config as conf
 from tests import experiment as exp
 from tests.fixtures.custom_searcher import searchers
@@ -147,7 +146,7 @@ def test_run_random_searcher_exp_core_api(
         config, conf.fixtures_path("custom_searcher"), 1
     )
 
-    session = api_utils.determined_test_session()
+    session = conf.user_session()
 
     # searcher experiment
     searcher_exp = bindings.get_GetExperiment(session, experimentId=experiment_id).experiment
@@ -219,18 +218,18 @@ def test_pause_multi_trial_random_searcher_core_api() -> None:
 
     # searcher experiment
     searcher_exp = bindings.get_GetExperiment(
-        api_utils.determined_test_session(), experimentId=searcher_exp_id
+        conf.user_session(), experimentId=searcher_exp_id
     ).experiment
     assert searcher_exp.state == bindings.experimentv1State.COMPLETED
 
     # actual experiment
     experiment = bindings.get_GetExperiment(
-        api_utils.determined_test_session(), experimentId=multi_trial_exp_id
+        conf.user_session(), experimentId=multi_trial_exp_id
     ).experiment
     assert experiment.numTrials == 5
 
     trials = bindings.get_GetExperimentTrials(
-        api_utils.determined_test_session(), experimentId=experiment.id
+        conf.user_session(), experimentId=experiment.id
     ).trials
 
     ok = True
@@ -415,7 +414,7 @@ def test_run_asha_searcher_exp_core_api(
     experiment_id = exp.run_basic_test_with_temp_config(
         config, conf.fixtures_path("custom_searcher"), 1
     )
-    session = api_utils.determined_test_session()
+    session = conf.user_session()
 
     # searcher experiment
     searcher_exp = bindings.get_GetExperiment(session, experimentId=experiment_id).experiment

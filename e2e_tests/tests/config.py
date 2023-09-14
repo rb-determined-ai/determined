@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
-from determined.common import util
+from determined.common import api, util
 
 MASTER_SCHEME = "http"
 MASTER_IP = "localhost"
@@ -107,7 +107,27 @@ def load_config(config_path: str) -> Any:
 
 
 def make_master_url(suffix: str = "") -> str:
-    return "{}://{}:{}/{}".format(MASTER_SCHEME, MASTER_IP, MASTER_PORT, suffix)
+    return f"{MASTER_SCHEME}://{MASTER_IP}:{MASTER_PORT}/{suffix}"
+
+
+_user_session = None
+
+
+def user_session() -> api.Session:
+    global _user_session
+    if _user_session is None:
+        _user_session = api.Session(make_master_url(), username="determined", password="")
+    return _user_session
+
+
+_admin_session = None
+
+
+def admin_session() -> api.Session:
+    global _admin_session
+    if _admin_session is None:
+        _admin_session = api.Session(make_master_url(), username="admin", password="")
+    return _admin_session
 
 
 def set_global_batch_size(config: Dict[Any, Any], batch_size: int) -> Dict[Any, Any]:

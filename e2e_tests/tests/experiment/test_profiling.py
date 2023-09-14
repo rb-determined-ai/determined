@@ -22,10 +22,6 @@ from tests import experiment as exp
     ],
 )
 def test_streaming_observability_metrics_apis(model_def: str, timings_enabled: bool) -> None:
-    # TODO: refactor tests to not use cli singleton auth.
-    certs.cli_cert = certs.default_load(conf.make_master_url())
-    authentication.cli_auth = authentication.Authentication(conf.make_master_url())
-
     config_path = os.path.join(model_def, "const.yaml")
 
     config_obj = conf.load_config(config_path)

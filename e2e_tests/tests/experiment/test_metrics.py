@@ -7,7 +7,6 @@ import pytest
 
 from determined.common import api
 from determined.common.api import authentication, bindings, certs
-from tests import api_utils
 from tests import config as conf
 from tests import experiment as exp
 
@@ -15,10 +14,6 @@ from tests import experiment as exp
 @pytest.mark.e2e_cpu
 @pytest.mark.timeout(600)
 def test_streaming_metrics_api() -> None:
-    # TODO: refactor tests to not use cli singleton auth.
-    certs.cli_cert = certs.default_load(conf.make_master_url())
-    authentication.cli_auth = authentication.Authentication(conf.make_master_url())
-
     pool = mp.pool.ThreadPool(processes=7)
 
     experiment_id = exp.create_experiment(
@@ -297,7 +292,7 @@ def test_trial_time_series(group: str) -> None:
     )
     trials = exp.experiment_trials(exp_id)
     trial_id = trials[0].trial.id
-    sess = api_utils.determined_test_session(admin=False)
+    sess = conf.user_session()
     metric_names = ["lossx"]
 
     trial_metrics = bindings.v1TrialMetrics(
@@ -353,7 +348,7 @@ def test_trial_describe_metrics() -> None:
     assert len(losses) == 100
 
     # assert summary metrics in trial
-    sess = api_utils.determined_test_session(admin=True)
+    sess = conf.admin_session()
     resp = bindings.get_GetTrial(session=sess, trialId=trial_id)
     summaryMetrics = resp.trial.summaryMetrics
     assert summaryMetrics is not None

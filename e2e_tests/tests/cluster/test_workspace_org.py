@@ -11,7 +11,6 @@ from determined.common import api
 from determined.common.api import authentication, bindings, errors
 from determined.common.api._util import NTSC_Kind, wait_for_ntsc_state
 from determined.common.api.errors import APIException
-from tests import api_utils
 from tests import config as conf
 from tests.cluster.test_users import ADMIN_CREDENTIALS, change_user_password, logged_in_user
 from tests.experiment import run_basic_test, wait_for_experiment_state
@@ -25,8 +24,7 @@ def test_workspace_org() -> None:
     with logged_in_user(ADMIN_CREDENTIALS):
         change_user_password("determined", "")
     master_url = conf.make_master_url()
-    authentication.cli_auth = authentication.Authentication(master_url)
-    sess = api.Session(master_url, None, None, None)
+    sess = api.Session(master_url)
     admin_auth = authentication.Authentication(
         master_url, ADMIN_CREDENTIALS.username, ADMIN_CREDENTIALS.password
     )
@@ -402,7 +400,7 @@ def test_workspace_org() -> None:
 @pytest.mark.e2e_cpu
 @pytest.mark.parametrize("file_type", ["json", "yaml"])
 def test_workspace_checkpoint_storage_file(file_type: str) -> None:
-    sess = api_utils.determined_test_session(admin=True)
+    sess = conf.admin_session()
     w_name = uuid.uuid4().hex[:8]
     with tempfile.TemporaryDirectory() as tmpdir:
         path = os.path.join(tmpdir, "config")
@@ -432,7 +430,7 @@ host_path: /tmp/yaml"""
 
 @pytest.mark.e2e_cpu
 def test_reset_workspace_checkpoint_storage_conf() -> None:
-    sess = api_utils.determined_test_session(admin=True)
+    sess = conf.admin_session()
 
     # Make project with checkpoint storage config.
     resp_w = bindings.post_PostWorkspace(
@@ -465,7 +463,7 @@ def test_reset_workspace_checkpoint_storage_conf() -> None:
 def setup_workspaces(
     session: Optional[api.Session] = None, count: int = 1
 ) -> Generator[List[bindings.v1Workspace], None, None]:
-    session = session or api_utils.determined_test_session(admin=True)
+    session = session or conf.admin_session()
     assert session
     workspaces: List[bindings.v1Workspace] = []
     try:
@@ -498,7 +496,7 @@ TERMINATING_STATES = [
 # tag: no-cli
 @pytest.mark.e2e_cpu
 def test_workspace_delete_notebook() -> None:
-    admin_session = api_utils.determined_test_session(admin=True)
+    admin_session = conf.admin_session()
 
     # create a workspace using bindings
 
@@ -567,7 +565,7 @@ def test_workspace_delete_notebook() -> None:
 # tag: no_cli
 @pytest.mark.e2e_cpu
 def test_launch_in_archived() -> None:
-    admin_session = api_utils.determined_test_session(admin=True)
+    admin_session = conf.admin_session()
 
     with setup_workspaces(admin_session) as [workspace]:
         # archive the workspace
@@ -588,7 +586,7 @@ def test_launch_in_archived() -> None:
 # tag: no_cli
 @pytest.mark.e2e_cpu
 def test_workspaceid_set() -> None:
-    admin_session = api_utils.determined_test_session(admin=True)
+    admin_session = conf.admin_session()
 
     with setup_workspaces(admin_session) as [workspace]:
         # create a command inside the workspace

@@ -8,7 +8,6 @@ from determined.common import api, yaml
 from tests import command as cmd
 from tests import config as conf
 from tests import experiment as exp
-from tests.api_utils import determined_test_session
 from tests.filetree import FileTree
 
 num_trials = 1
@@ -75,7 +74,7 @@ def test_start_tensorboard_for_shared_fs_experiment(tmp_path: Path) -> None:
     command = ["tensorboard", "start", str(experiment_id), "--no-browser"]
     with cmd.interactive_command(*command) as tensorboard:
         assert tensorboard.task_id is not None
-        err = api.task_is_ready(determined_test_session(), tensorboard.task_id)
+        err = api.task_is_ready(conf.user_session(), tensorboard.task_id)
         assert err is None, err
 
 
@@ -100,7 +99,7 @@ def test_start_tensorboard_for_s3_experiment(
     command = ["tensorboard", "start", str(experiment_id), "--no-browser"]
     with cmd.interactive_command(*command) as tensorboard:
         assert tensorboard.task_id is not None
-        err = api.task_is_ready(determined_test_session(), tensorboard.task_id)
+        err = api.task_is_ready(conf.user_session(), tensorboard.task_id)
         assert err is None, err
 
 
@@ -149,7 +148,7 @@ def test_start_tensorboard_for_multi_experiment(tmp_path: Path, secrets: Dict[st
 
     with cmd.interactive_command(*command) as tensorboard:
         assert tensorboard.task_id is not None
-        err = api.task_is_ready(determined_test_session(), tensorboard.task_id)
+        err = api.task_is_ready(conf.user_session(), tensorboard.task_id)
         assert err is None, err
 
 

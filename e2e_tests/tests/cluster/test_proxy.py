@@ -9,14 +9,13 @@ import pytest
 import requests
 
 from determined.common.api import bindings
-from tests import api_utils
 from tests import config as conf
 from tests import experiment as exp
 from tests import ray_utils
 
 
 def _experiment_task_id(exp_id: int) -> str:
-    sess = api_utils.determined_test_session()
+    sess = conf.user_session()
     trials = bindings.get_GetExperimentTrials(sess, experimentId=exp_id).trials
     assert len(trials) > 0
 
@@ -90,7 +89,7 @@ def test_experiment_proxy_ray_tunnel() -> None:
             proc.terminate()
             proc.wait(10)
     finally:
-        sess = api_utils.determined_test_session()
+        sess = conf.user_session()
         bindings.post_KillExperiment(sess, id=exp_id)
 
 
@@ -123,7 +122,7 @@ def _kill_all_ray_experiments() -> None:
         check=True,
     )
     reader = csv.DictReader(StringIO(proc.stdout))
-    sess = api_utils.determined_test_session()
+    sess = conf.user_session()
     for row in reader:
         if row["name"] == "ray_launcher":
             if row["state"] not in ["CANCELED", "COMPLETED"]:
@@ -168,7 +167,7 @@ def test_experiment_proxy_ray_publish() -> None:
             _probe_tunnel(proc)
             _ray_job_submit(exp_path)
         finally:
-            sess = api_utils.determined_test_session()
+            sess = conf.user_session()
             bindings.post_KillExperiment(sess, id=exp_id)
     finally:
         proc.terminate()

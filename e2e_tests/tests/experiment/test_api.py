@@ -5,14 +5,13 @@ import pytest
 
 from determined.common.api import bindings
 from determined.common.api.bindings import experimentv1State
-from tests import api_utils
 from tests import config as conf
 from tests import experiment as exp
 
 
 @pytest.mark.e2e_cpu
 def test_archived_proj_exp_list() -> None:
-    session = api_utils.determined_test_session(admin=True)
+    session = conf.admin_session()
     workspaces: List[bindings.v1Workspace] = []
     count = 2
 

@@ -6,7 +6,7 @@ import pytest
 from determined.common import api
 from determined.common.api import authentication, bindings, errors
 from tests import api_utils
-from tests.api_utils import configure_token_store, create_test_user, determined_test_session
+from tests import config as conf
 from tests.cluster.test_workspace_org import setup_workspaces
 
 from .test_groups import det_cmd, det_cmd_expect_error, det_cmd_json
@@ -21,7 +21,7 @@ def rbac_disabled() -> bool:
     if roles_not_implemented():
         return True
     try:
-        return not bindings.get_GetMaster(determined_test_session()).rbacEnabled
+        return not bindings.get_GetMaster(conf.user_session()).rbacEnabled
     except (errors.APIException, errors.MasterNotFoundException):
         return True
 
@@ -30,7 +30,7 @@ def strict_q_control_disabled() -> bool:
     if roles_not_implemented() or rbac_disabled():
         return True
     try:
-        return not bindings.get_GetMaster(determined_test_session()).strictJobQueueControl
+        return not bindings.get_GetMaster(conf.user_session()).strictJobQueueControl
     except (errors.APIException, errors.MasterNotFoundException):
         return True
 
@@ -100,13 +100,12 @@ def create_workspaces_with_users(
     ]
     """
     sess = api_utils.determined_test_session(admin=True)
-    configure_token_store(ADMIN_CREDENTIALS)
     rid_to_creds: Dict[int, authentication.Credentials] = {}
     with setup_workspaces(count=len(assignments_list)) as workspaces:
         for workspace, user_list in zip(workspaces, assignments_list):
             for rid, roles in user_list:
                 if rid not in rid_to_creds:
-                    rid_to_creds[rid] = create_test_user()
+                    rid_to_creds[rid] = api_utils.create_test_user()
                 for role in roles:
                     api.assign_role(
                         session=sess,
@@ -572,7 +571,7 @@ def test_rbac_describe_role() -> None:
             check=True,
         )
 
-        sess = api_utils.determined_test_session(ADMIN_CREDENTIALS)
+        sess = conf.admin_session()
         user_id = api.usernames_to_user_ids(sess, [test_user_creds.username])[0]
         group_id = api.group_name_to_group_id(sess, group_name)
 

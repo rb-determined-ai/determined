@@ -102,7 +102,7 @@ def archive_experiments(experiment_ids: List[int], name: Optional[str] = None) -
     if name is not None:
         filters = bindings.v1BulkExperimentFilters(name=name)
         body = bindings.v1ArchiveExperimentsRequest(experimentIds=[], filters=filters)
-    bindings.post_ArchiveExperiments(api_utils.determined_test_session(), body=body)
+    bindings.post_ArchiveExperiments(conf.user_session(), body=body)
 
 
 def pause_experiment(experiment_id: int) -> None:
@@ -115,7 +115,7 @@ def pause_experiments(experiment_ids: List[int], name: Optional[str] = None) -> 
     if name is not None:
         filters = bindings.v1BulkExperimentFilters(name=name)
         body = bindings.v1PauseExperimentsRequest(experimentIds=[], filters=filters)
-    bindings.post_PauseExperiments(api_utils.determined_test_session(), body=body)
+    bindings.post_PauseExperiments(conf.user_session(), body=body)
 
 
 def activate_experiment(experiment_id: int) -> None:
@@ -129,16 +129,16 @@ def activate_experiments(experiment_ids: List[int], name: Optional[str] = None) 
     else:
         filters = bindings.v1BulkExperimentFilters(name=name)
         body = bindings.v1ActivateExperimentsRequest(experimentIds=[], filters=filters)
-    bindings.post_ActivateExperiments(api_utils.determined_test_session(), body=body)
+    bindings.post_ActivateExperiments(conf.user_session(), body=body)
 
 
 def cancel_experiment(experiment_id: int) -> None:
-    bindings.post_CancelExperiment(api_utils.determined_test_session(), id=experiment_id)
+    bindings.post_CancelExperiment(conf.user_session(), id=experiment_id)
     wait_for_experiment_state(experiment_id, experimentv1State.CANCELED)
 
 
 def kill_experiment(experiment_id: int) -> None:
-    bindings.post_KillExperiment(api_utils.determined_test_session(), id=experiment_id)
+    bindings.post_KillExperiment(conf.user_session(), id=experiment_id)
     wait_for_experiment_state(experiment_id, experimentv1State.CANCELED)
 
 
@@ -148,7 +148,7 @@ def cancel_experiments(experiment_ids: List[int], name: Optional[str] = None) ->
     else:
         filters = bindings.v1BulkExperimentFilters(name=name)
         body = bindings.v1CancelExperimentsRequest(experimentIds=[], filters=filters)
-    bindings.post_CancelExperiments(api_utils.determined_test_session(), body=body)
+    bindings.post_CancelExperiments(conf.user_session(), body=body)
 
 
 def kill_experiments(experiment_ids: List[int], name: Optional[str] = None) -> None:
@@ -157,11 +157,11 @@ def kill_experiments(experiment_ids: List[int], name: Optional[str] = None) -> N
     else:
         filters = bindings.v1BulkExperimentFilters(name=name)
         body = bindings.v1KillExperimentsRequest(experimentIds=[], filters=filters)
-    bindings.post_KillExperiments(api_utils.determined_test_session(), body=body)
+    bindings.post_KillExperiments(conf.user_session(), body=body)
 
 
 def kill_trial(trial_id: int) -> None:
-    bindings.post_KillTrial(api_utils.determined_test_session(), id=trial_id)
+    bindings.post_KillTrial(conf.user_session(), id=trial_id)
     wait_for_trial_state(trial_id, trialv1State.CANCELED)
 
 
@@ -174,7 +174,7 @@ def wait_for_experiment_by_name_is_active(
     for seconds_waited in range(max_wait_secs):
         try:
             response = bindings.get_GetExperiments(
-                api_utils.determined_test_session(), name=experiment_name
+                conf.user_session(), name=experiment_name
             ).experiments
             if len(response) == 0:
                 time.sleep(1)
@@ -327,11 +327,10 @@ def wait_for_trial_state(
 
 
 def experiment_has_active_workload(experiment_id: int) -> bool:
-    certs.cli_cert = certs.default_load(conf.make_master_url())
-    authentication.cli_auth = authentication.Authentication(conf.make_master_url())
-    r = api.get(conf.make_master_url(), "tasks").json()
+    sess = conf.user_session()
+    r = sess.get("tasks").json()
     for task in r.values():
-        if "Experiment {}".format(experiment_id) in task["name"] and len(task["resources"]) > 0:
+        if f"Experiment {experiment_id}" in task["name"] and len(task["resources"]) > 0:
             return True
 
     return False
@@ -383,8 +382,6 @@ def wait_for_experiment_workload_progress(
 
 
 def experiment_has_completed_workload(experiment_id: int) -> bool:
-    certs.cli_cert = certs.default_load(conf.make_master_url())
-    authentication.cli_auth = authentication.Authentication(conf.make_master_url())
     trials = experiment_trials(experiment_id)
 
     if not any(trials):
@@ -398,7 +395,7 @@ def experiment_has_completed_workload(experiment_id: int) -> bool:
 
 
 def experiment_first_trial(exp_id: int) -> int:
-    session = api_utils.determined_test_session()
+    session = conf.user_session()
     trials = bindings.get_GetExperimentTrials(session, experimentId=exp_id).trials
 
     assert len(trials) > 0
@@ -408,7 +405,7 @@ def experiment_first_trial(exp_id: int) -> int:
 
 
 def experiment_config_json(experiment_id: int) -> Dict[str, Any]:
-    r = bindings.get_GetExperiment(api_utils.determined_test_session(), experimentId=experiment_id)
+    r = bindings.get_GetExperiment(conf.user_session(), experimentId=experiment_id)
     assert r.experiment and r.experiment.config
     return r.experiment.config
 
@@ -423,7 +420,7 @@ def experiment_state(
 
 
 def trial_state(trial_id: int) -> trialv1State:
-    r = bindings.get_GetTrial(api_utils.determined_test_session(), trialId=trial_id)
+    r = bindings.get_GetTrial(conf.user_session(), trialId=trial_id)
     return r.trial.state
 
 
@@ -436,7 +433,7 @@ class TrialPlusWorkload:
 
 
 def experiment_trials(experiment_id: int) -> List[TrialPlusWorkload]:
-    sess = api_utils.determined_test_session()
+    sess = conf.user_session()
     r1 = bindings.get_GetExperimentTrials(sess, experimentId=experiment_id)
     src_trials = r1.trials
     trials = []
@@ -512,10 +509,7 @@ def num_error_trials(experiment_id: int) -> int:
 
 
 def trial_logs(trial_id: int, follow: bool = False) -> List[str]:
-    return [
-        tl.message
-        for tl in api.trial_logs(api_utils.determined_test_session(), trial_id, follow=follow)
-    ]
+    return [tl.message for tl in api.trial_logs(conf.user_session(), trial_id, follow=follow)]
 
 
 def workloads_with_training(

@@ -6,7 +6,6 @@ import pytest
 
 from determined.common.api.errors import APIException
 from determined.experimental import Determined, ModelSortBy
-from tests import api_utils
 from tests import config as conf
 from tests import experiment as exp
 from tests.cluster.test_users import log_out_user
@@ -197,7 +196,7 @@ def test_model_cli() -> None:
     assert "Workspace ID" in output and "1" in output
 
     # add a test workspace.
-    admin_session = api_utils.determined_test_session(admin=True)
+    admin_session = conf.admin_session()
     with setup_workspaces(admin_session) as [test_workspace]:
         test_workspace_name = test_workspace.name
         # create model in test_workspace

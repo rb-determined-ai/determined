@@ -158,7 +158,7 @@ def extract_id_and_owner_from_exp_list(output: str) -> List[Tuple[int, str]]:
 def test_post_user_api(clean_auth: None, login_admin: None) -> None:
     new_username = get_random_string()
 
-    sess = api_utils.determined_test_session(admin=True)
+    sess = conf.admin_session()
 
     user = bindings.v1User(active=True, admin=False, username=new_username)
     body = bindings.v1PostUserRequest(password="", user=user)
@@ -733,8 +733,12 @@ def test_tensorboard_creation_and_listing(clean_auth: None, login_admin: None) -
 def test_command_creation_and_listing(clean_auth: None) -> None:
     creds1 = api_utils.create_test_user(True)
     creds2 = api_utils.create_test_user(True)
-    session1 = api_utils.determined_test_session(credentials=creds1)
-    session2 = api_utils.determined_test_session(credentials=creds2)
+    session1 = api.Session(
+        conf.make_master_url(), username=creds1.username, password=creds1.password
+    )
+    session2 = api.Session(
+        conf.make_master_url(), username=creds2.username, password=creds2.password
+    )
 
     command_id1 = run_command(session=session1)
 
@@ -969,11 +973,11 @@ def test_change_displayname(clean_auth: None, login_admin: None) -> None:
     original_name = u_patch.username
 
     master_url = conf.make_master_url()
-    certs.cli_cert = certs.default_load(master_url)
-    authentication.cli_auth = authentication.Authentication(
+    cert = certs.default_load(master_url)
+    utp = authentication.Authentication(
         conf.make_master_url(), requested_user=original_name, password=""
     )
-    sess = api.Session(master_url, original_name, authentication.cli_auth, certs.cli_cert)
+    sess = api.Session(master_url, original_name, utp, cert)
 
     current_user = _fetch_user_by_username(sess, original_name)
     assert current_user is not None and current_user.id
@@ -1015,7 +1019,7 @@ def test_patch_agentusergroup(clean_auth: None, login_admin: None) -> None:
     test_username = test_user_credentials.username
 
     # Patch - normal.
-    sess = api_utils.determined_test_session(admin=True)
+    sess = conf.admin_session()
     patch_user = bindings.v1PatchUser(
         agentUserGroup=bindings.v1AgentUserGroup(
             agentGid=1000, agentUid=1000, agentUser="username", agentGroup="groupname"

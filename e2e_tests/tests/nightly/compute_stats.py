@@ -8,7 +8,6 @@ from dateutil import parser
 
 from determined.common import api
 from determined.common.api import bindings
-from tests import api_utils
 from tests import config as conf
 
 ADD_KEY = "adding"
@@ -99,7 +98,7 @@ def compare_stats() -> None:
     gpu_from_log, global_start, global_end = parse_log_for_gpu_stats(log_path)
     try:
         res = bindings.get_ResourceAllocationRaw(
-            api_utils.determined_test_session(),
+            conf.user_session(),
             timestampAfter=global_start,
             timestampBefore=global_end,
         )
