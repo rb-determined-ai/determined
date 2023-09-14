@@ -3,7 +3,6 @@ from statistics import mean
 from typing import Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 
-from determined.common import api
 from determined.profiler import SysMetricName
 from tests import config as conf
 
@@ -59,18 +58,14 @@ def get_profiling_metrics(trial_id: int, metric_type: str) -> List[float]:
     """
     Calls profiler API to return a list of metric values given trial ID and metric type
     """
-    with api.get(
-        conf.make_master_url(),
-        "api/v1/trials/{}/profiler/metrics?{}".format(
-            trial_id,
-            urlencode(
-                {
-                    "labels.name": metric_type,
-                    "labels.metricType": "PROFILER_METRIC_TYPE_SYSTEM",
-                    "follow": "true",
-                }
-            ),
-        ),
+    sess = conf.user_sesison()
+    with sess.get(
+        f"api/v1/trials/{trial_id}/profiler/metrics",
+        params={
+            "labels.name": metric_type,
+            "labels.metricType": "PROFILER_METRIC_TYPE_SYSTEM",
+            "follow": "true",
+        },
         stream=True,
     ) as r:
         return [

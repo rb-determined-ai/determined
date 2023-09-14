@@ -60,9 +60,9 @@ def test_streaming_metrics_api() -> None:
 
 
 def request_metric_names(experiment_id):  # type: ignore
-    response = api.get(
-        conf.make_master_url(),
-        "api/v1/experiments/metrics-stream/metric-names?ids={}".format(experiment_id),
+    sess = conf.user_session()
+    response = sess.get(
+        f"api/v1/experiments/metrics-stream/metric-names?ids={experiment_id}",
         params={"period_seconds": 1},
     )
     results = [message["result"] for message in map(json.loads, response.text.splitlines())]
@@ -96,9 +96,9 @@ def request_metric_names(experiment_id):  # type: ignore
 
 
 def request_train_metric_batches(experiment_id):  # type: ignore
-    response = api.get(
-        conf.make_master_url(),
-        "api/v1/experiments/{}/metrics-stream/batches".format(experiment_id),
+    sess = conf.user_session()
+    response = sess.get(
+        f"api/v1/experiments/{experiment_id}/metrics-stream/batches",
         params={"metric_name": "loss", "metric_type": "METRIC_TYPE_TRAINING", "period_seconds": 1},
     )
     results = [message["result"] for message in map(json.loads, response.text.splitlines())]
@@ -120,9 +120,9 @@ def request_train_metric_batches(experiment_id):  # type: ignore
 
 
 def request_valid_metric_batches(experiment_id):  # type: ignore
-    response = api.get(
-        conf.make_master_url(),
-        "api/v1/experiments/{}/metrics-stream/batches".format(experiment_id),
+    sess = conf.user_session()
+    response = sess.get(
+        f"api/v1/experiments/{experiment_id}/metrics-stream/batches",
         params={
             "metric_name": "accuracy",
             "metric_type": "METRIC_TYPE_VALIDATION",
@@ -158,9 +158,9 @@ def validate_hparam_types(hparams: dict) -> Union[None, str]:
 
 
 def request_train_trials_snapshot(experiment_id):  # type: ignore
-    response = api.get(
-        conf.make_master_url(),
-        "api/v1/experiments/{}/metrics-stream/trials-snapshot".format(experiment_id),
+    sess = conf.user_session()
+    response = sess.get(
+        f"api/v1/experiments/{experiment_id}/metrics-stream/trials-snapshot",
         params={
             "metric_name": "loss",
             "metric_type": "METRIC_TYPE_TRAINING",
@@ -188,9 +188,9 @@ def request_train_trials_snapshot(experiment_id):  # type: ignore
 
 
 def request_valid_trials_snapshot(experiment_id):  # type: ignore
-    response = api.get(
-        conf.make_master_url(),
-        "api/v1/experiments/{}/metrics-stream/trials-snapshot".format(experiment_id),
+    sess = conf.user_session()
+    response = sess.get(
+        f"api/v1/experiments/{experiment_id}/metrics-stream/trials-snapshot",
         params={
             "metric_name": "accuracy",
             "metric_type": "METRIC_TYPE_VALIDATION",
@@ -255,9 +255,10 @@ def check_trials_sample_result(results: list) -> Union[None, tuple]:
 
 
 def request_train_trials_sample(experiment_id):  # type: ignore
-    response = api.get(
+    sess = conf.user_session()
+    response = sess.get(
         conf.make_master_url(),
-        "api/v1/experiments/{}/metrics-stream/trials-sample".format(experiment_id),
+        f"api/v1/experiments/{experiment_id}/metrics-stream/trials-sample",
         params={
             "metric_name": "loss",
             "metric_type": "METRIC_TYPE_TRAINING",
@@ -269,9 +270,9 @@ def request_train_trials_sample(experiment_id):  # type: ignore
 
 
 def request_valid_trials_sample(experiment_id):  # type: ignore
-    response = api.get(
-        conf.make_master_url(),
-        "api/v1/experiments/{}/metrics-stream/trials-sample".format(experiment_id),
+    sess = conf.user_session()
+    response = sess.get(
+        f"api/v1/experiments/{experiment_id}/metrics-stream/trials-sample",
         params={
             "metric_name": "accuracy",
             "metric_type": "METRIC_TYPE_VALIDATION",

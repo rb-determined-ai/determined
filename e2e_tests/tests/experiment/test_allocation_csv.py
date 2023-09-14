@@ -27,10 +27,8 @@ def test_experiment_capture() -> None:
     exp.wait_for_experiment_state(experiment_id, experimentv1State.COMPLETED)
 
     end_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    r = api.get(
-        conf.make_master_url(),
-        f"{API_URL}timestamp_after={start_time}&timestamp_before={end_time}",
-    )
+    sess = conf.user_session()
+    r = sess.get(f"{API_URL}timestamp_after={start_time}&timestamp_before={end_time}")
     assert r.status_code == requests.codes.ok, r.text
 
     # Check if an entry exists for experiment that just ran
@@ -53,10 +51,8 @@ def test_notebook_capture() -> None:
     assert task_id is not None
 
     end_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    r = api.get(
-        conf.make_master_url(),
-        f"{API_URL}timestamp_after={start_time}&timestamp_before={end_time}",
-    )
+    sess = conf.user_session()
+    r = sess.get(f"{API_URL}timestamp_after={start_time}&timestamp_before={end_time}")
     assert r.status_code == requests.codes.ok, r.text
 
     assert re.search(f"{task_id},NOTEBOOK", r.text) is not None
@@ -86,10 +82,8 @@ def test_tensorboard_experiment_capture() -> None:
 
     # Ensure that end_time captures tensorboard
     end_time = (datetime.now(timezone.utc) + timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    r = api.get(
-        conf.make_master_url(),
-        f"{API_URL}timestamp_after={start_time}&timestamp_before={end_time}",
-    )
+    sess = conf.user_session()
+    r = sess.get(f"{API_URL}timestamp_after={start_time}&timestamp_before={end_time}")
     assert r.status_code == requests.codes.ok, r.text
 
     # Confirm Experiment is captured and valid
