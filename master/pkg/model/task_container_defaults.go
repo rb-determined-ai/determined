@@ -20,6 +20,9 @@ import (
 	"github.com/determined-ai/determined/master/pkg/schemas/expconf"
 	"github.com/determined-ai/determined/master/pkg/set"
 )
+	DtrainNetworkInterface string                `json:"dtrain_network_interface,omitempty"`
+	NCCLPortRange          string                `json:"nccl_port_range,omitempty"`
+	GLOOPortRange          string                `json:"gloo_port_range,omitempty"`
 
 // TaskContainerDefaultsConfig configures docker defaults for all containers.
 // If you add a field to this, you must update the merge impl.
