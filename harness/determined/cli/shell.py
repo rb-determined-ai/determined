@@ -23,8 +23,8 @@ from determined.common.check import check_eq
 from determined.common.declarative_argparse import Arg, Cmd, Group
 
 
-@authentication.required
 def start_shell(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     data = {}
     if args.passphrase:
         data["passphrase"] = getpass.getpass("Enter new passphrase: ")
@@ -50,10 +50,9 @@ def start_shell(args: Namespace) -> None:
 
     render.report_job_launched("shell", sid)
 
-    session = cli.setup_session(args)
-    cli.wait_ntsc_ready(cli.setup_session(args), api.NTSC_Kind.shell, sid)
+    cli.wait_ntsc_ready(sess, api.NTSC_Kind.shell, sid)
 
-    shell = bindings.get_GetShell(session, shellId=sid).shell
+    shell = bindings.get_GetShell(sess, shellId=sid).shell
     _open_shell(
         args.master,
         shell.to_json(),
@@ -63,10 +62,10 @@ def start_shell(args: Namespace) -> None:
     )
 
 
-@authentication.required
 def open_shell(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     shell_id = command.expand_uuid_prefixes(args)
-    shell = api.get(args.master, f"api/v1/shells/{shell_id}").json()["shell"]
+    shell = sess.get(f"api/v1/shells/{shell_id}").json()["shell"]
     _open_shell(
         args.master,
         shell,
@@ -76,10 +75,10 @@ def open_shell(args: Namespace) -> None:
     )
 
 
-@authentication.required
 def show_ssh_command(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     shell_id = command.expand_uuid_prefixes(args)
-    shell = api.get(args.master, f"api/v1/shells/{shell_id}").json()["shell"]
+    shell = sess.get(f"api/v1/shells/{shell_id}").json()["shell"]
     _open_shell(args.master, shell, args.ssh_opts, retain_keys_and_print=True, print_only=True)
 
 

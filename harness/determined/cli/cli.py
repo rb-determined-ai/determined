@@ -69,15 +69,15 @@ from determined.errors import EnterpriseOnlyError
 from .errors import CliError, FeatureFlagDisabled
 
 
-@authentication.required
 def preview_search(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     experiment_config = safe_load_yaml_with_exceptions(args.config_file)
     args.config_file.close()
 
     if "searcher" not in experiment_config:
         print("Experiment configuration must have 'searcher' section")
         sys.exit(1)
-    r = api.post(args.master, "searcher/preview", json=experiment_config)
+    r = sess.post("searcher/preview", json=experiment_config)
     j = r.json()
 
     def to_full_name(kind: str) -> str:

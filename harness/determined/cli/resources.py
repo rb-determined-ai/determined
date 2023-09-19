@@ -14,15 +14,15 @@ def print_response(r: requests.Response) -> None:
         sys.stdout.buffer.write(chunk)
 
 
-@authentication.required
 def raw(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     params = {"timestamp_after": args.timestamp_after, "timestamp_before": args.timestamp_before}
     path = "api/v1/resources/allocation/raw" if args.json else "resources/allocation/raw"
-    print_response(api.get(args.master, path, params=params))
+    print_response(sess.get(path, params=params))
 
 
-@authentication.required
 def aggregated(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     params = {
         "start_date": args.start_date,
         "end_date": args.end_date,
@@ -33,7 +33,7 @@ def aggregated(args: Namespace) -> None:
     path = (
         "api/v1/resources/allocation/aggregated" if args.json else "resources/allocation/aggregated"
     )
-    print_response(api.get(args.master, path, params=params))
+    print_response(sess.get(path, params=params))
 
 
 args_description: ArgsDescription = [

@@ -35,19 +35,16 @@ from .trial import logs_args_description
 FLUSH = False
 
 
-@authentication.required
 def activate(args: Namespace) -> None:
     bindings.post_ActivateExperiment(cli.setup_session(args), id=args.experiment_id)
     print(f"Activated experiment {args.experiment_id}")
 
 
-@authentication.required
 def archive(args: Namespace) -> None:
     bindings.post_ArchiveExperiment(cli.setup_session(args), id=args.experiment_id)
     print(f"Archived experiment {args.experiment_id}")
 
 
-@authentication.required
 def cancel(args: Namespace) -> None:
     bindings.post_CancelExperiment(cli.setup_session(args), id=args.experiment_id)
     print(f"Canceled experiment {args.experiment_id}")
@@ -232,8 +229,8 @@ def _follow_test_experiment_logs(sess: api.Session, exp_id: int) -> None:
             time.sleep(0.2)
 
 
-@authentication.required
 def submit_experiment(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     config_text = args.config_file.read()
     args.config_file.close()
     experiment_config = _parse_config_text_or_exit(config_text, args.config_file.name, args.config)
@@ -246,8 +243,6 @@ def submit_experiment(args: Namespace) -> None:
         yaml_dump = yaml.dump(experiment_config)
         assert yaml_dump is not None
         config_text = yaml_dump
-
-    sess = cli.setup_session(args)
 
     req = bindings.v1CreateExperimentRequest(
         activate=not args.paused,
@@ -333,7 +328,6 @@ def create(args: Namespace) -> None:
         submit_experiment(args)
 
 
-@authentication.required
 def delete_experiment(args: Namespace) -> None:
     if args.yes or render.yes_or_no(
         "Deleting an experiment will result in the unrecoverable \n"
@@ -348,7 +342,6 @@ def delete_experiment(args: Namespace) -> None:
         print("Aborting experiment deletion.")
 
 
-@authentication.required
 def describe(args: Namespace) -> None:
     session = cli.setup_session(args)
     responses: List[bindings.v1GetExperimentResponse] = []
@@ -586,7 +579,6 @@ def describe(args: Namespace) -> None:
     render.tabulate_or_csv(headers, values, args.csv, outfile)
 
 
-@authentication.required
 def experiment_logs(args: Namespace) -> None:
     sess = cli.setup_session(args)
     trials = bindings.get_GetExperimentTrials(sess, experimentId=args.experiment_id).trials
@@ -624,7 +616,6 @@ def experiment_logs(args: Namespace) -> None:
         )
 
 
-@authentication.required
 def config(args: Namespace) -> None:
     result = bindings.get_GetExperiment(
         cli.setup_session(args), experimentId=args.experiment_id
@@ -632,7 +623,6 @@ def config(args: Namespace) -> None:
     yaml.safe_dump(result, stream=sys.stdout, default_flow_style=False)
 
 
-@authentication.required
 def download_model_def(args: Namespace) -> None:
     resp = bindings.get_GetModelDef(cli.setup_session(args), experimentId=args.experiment_id)
     dst = f"experiment_{args.experiment_id}_model_def.tgz"
@@ -640,7 +630,6 @@ def download_model_def(args: Namespace) -> None:
         f.write(base64.b64decode(resp.b64Tgz))
 
 
-@authentication.required
 def download(args: Namespace) -> None:
     exp = client.ExperimentReference(args.experiment_id, cli.setup_session(args))
     checkpoints = exp.top_n_checkpoints(
@@ -658,13 +647,11 @@ def download(args: Namespace) -> None:
             print()
 
 
-@authentication.required
 def kill_experiment(args: Namespace) -> None:
     bindings.post_KillExperiment(cli.setup_session(args), id=args.experiment_id)
     print(f"Killed experiment {args.experiment_id}")
 
 
-@authentication.required
 def wait(args: Namespace) -> None:
     exp = client.ExperimentReference(args.experiment_id, cli.setup_session(args))
     state = exp.wait(interval=args.polling_interval)
@@ -672,7 +659,6 @@ def wait(args: Namespace) -> None:
         sys.exit(1)
 
 
-@authentication.required
 def list_experiments(args: Namespace) -> None:
     session = cli.setup_session(args)
 
@@ -764,7 +750,6 @@ def scalar_validation_metrics_names(
     return set()
 
 
-@authentication.required
 def list_trials(args: Namespace) -> None:
     session = cli.setup_session(args)
 
@@ -795,13 +780,11 @@ def list_trials(args: Namespace) -> None:
     render.tabulate_or_csv(headers, values, args.csv)
 
 
-@authentication.required
 def pause(args: Namespace) -> None:
     bindings.post_PauseExperiment(cli.setup_session(args), id=args.experiment_id)
     print(f"Paused experiment {args.experiment_id}")
 
 
-@authentication.required
 def set_description(args: Namespace) -> None:
     session = cli.setup_session(args)
     exp = bindings.get_GetExperiment(session, experimentId=args.experiment_id).experiment
@@ -811,7 +794,6 @@ def set_description(args: Namespace) -> None:
     print(f"Set description of experiment {args.experiment_id} to '{args.description}'")
 
 
-@authentication.required
 def set_name(args: Namespace) -> None:
     session = cli.setup_session(args)
     exp = bindings.get_GetExperiment(session, experimentId=args.experiment_id).experiment
@@ -821,7 +803,6 @@ def set_name(args: Namespace) -> None:
     print(f"Set name of experiment {args.experiment_id} to '{args.name}'")
 
 
-@authentication.required
 def add_label(args: Namespace) -> None:
     session = cli.setup_session(args)
     exp = bindings.get_GetExperiment(session, experimentId=args.experiment_id).experiment
@@ -834,7 +815,6 @@ def add_label(args: Namespace) -> None:
     print(f"Added label '{args.label}' to experiment {args.experiment_id}")
 
 
-@authentication.required
 def remove_label(args: Namespace) -> None:
     session = cli.setup_session(args)
     exp = bindings.get_GetExperiment(session, experimentId=args.experiment_id).experiment
@@ -845,7 +825,6 @@ def remove_label(args: Namespace) -> None:
     print(f"Removed label '{args.label}' from experiment {args.experiment_id}")
 
 
-@authentication.required
 def set_max_slots(args: Namespace) -> None:
     session = cli.setup_session(args)
     exp_patch = bindings.v1PatchExperiment(
@@ -856,7 +835,6 @@ def set_max_slots(args: Namespace) -> None:
     print(f"Set `max_slots` of experiment {args.experiment_id} to {args.max_slots}")
 
 
-@authentication.required
 def set_weight(args: Namespace) -> None:
     session = cli.setup_session(args)
     exp_patch = bindings.v1PatchExperiment(
@@ -866,7 +844,6 @@ def set_weight(args: Namespace) -> None:
     print(f"Set `weight` of experiment {args.experiment_id} to {args.weight}")
 
 
-@authentication.required
 def set_priority(args: Namespace) -> None:
     session = cli.setup_session(args)
     exp_patch = bindings.v1PatchExperiment(
@@ -877,8 +854,8 @@ def set_priority(args: Namespace) -> None:
     print(f"Set `priority` of experiment {args.experiment_id} to {args.priority}")
 
 
-@authentication.required
 def set_gc_policy(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     if not args.yes:
         policy = {
             "save_experiment_best": args.save_experiment_best,
@@ -886,7 +863,7 @@ def set_gc_policy(args: Namespace) -> None:
             "save_trial_latest": args.save_trial_latest,
         }
 
-        r = api.get(args.master, f"experiments/{args.experiment_id}/preview_gc", params=policy)
+        r = sess.get(f"experiments/{args.experiment_id}/preview_gc", params=policy)
         response = r.json()
         checkpoints = response["checkpoints"]
         metric_name = response["metric_name"]
@@ -931,7 +908,6 @@ def set_gc_policy(args: Namespace) -> None:
         "in the unrecoverable deletion of checkpoints.  Do you wish to "
         "proceed?"
     ):
-        session = cli.setup_session(args)
         exp_patch = bindings.v1PatchExperiment(
             id=args.experiment_id,
             checkpointStorage=bindings.PatchExperimentPatchCheckpointStorage(
@@ -946,13 +922,11 @@ def set_gc_policy(args: Namespace) -> None:
         print("Aborting operations.")
 
 
-@authentication.required
 def unarchive(args: Namespace) -> None:
     bindings.post_UnarchiveExperiment(cli.setup_session(args), id=args.experiment_id)
     print(f"Unarchived experiment {args.experiment_id}")
 
 
-@authentication.required
 def move_experiment(args: Namespace) -> None:
     sess = cli.setup_session(args)
     (w, p) = project_by_name(sess, args.workspace_name, args.project_name)

@@ -130,6 +130,7 @@ def main(hvd_args: List[str], script: List[str], autohorovod: bool) -> int:
 
         # Mark sshd containers as daemon resources that the master should kill when all non-daemon
         # containers (horovodrun, in this case) have exited.
+        # XXX
         api.post(
             info.master_url,
             path=f"/api/v1/allocations/{info.allocation_id}/resources/{resources_id}/daemon",

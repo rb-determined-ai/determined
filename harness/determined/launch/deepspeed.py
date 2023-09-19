@@ -267,6 +267,7 @@ def main(script: List[str]) -> int:
 
         # Mark sshd containers as daemon containers that the master should kill when all non-daemon
         # containers (deepspeed launcher, in this case) have exited.
+        # XXX
         api.post(
             info.master_url,
             path=f"/api/v1/allocations/{info.allocation_id}/resources/{resources_id}/daemon",

@@ -39,14 +39,20 @@ class UsernameTokenPair:
         self.token = token
 
 
-def do_login(
+def login(
     master_address: str,
     username: str,
     password: str,
     cert: Optional[certs.Cert] = None,
 ) -> UsernameTokenPair:
+    """
+    Log in without considering or affecting the TokenStore on the file system.
+
+    Used as part of login_with_cache, and also useful in tests where you wish to not affect the
+    TokenStore.
+    """
     password = api.salt_and_hash(password)
-    unauth_session = api.Session(user=username, master=master_address, utp=None, cert=cert)
+    unauth_session = api.UnauthSession(master=master_address, cert=cert)
     login = bindings.v1LoginRequest(username=username, password=password, isHashed=True)
     r = bindings.post_Login(session=unauth_session, body=login)
     return UsernameTokenPair(username, r.token)
@@ -76,12 +82,18 @@ def default_load_user_password(
     return token_store.get_active_user(), password
 
 
-def authenticate(
+def login_with_cache(
     master_address: Optional[str] = None,
     requested_user: Optional[str] = None,
     password: Optional[str] = None,
     cert: Optional[certs.Cert] = None,
 ) -> UsernameTokenPair:
+    """
+    Log in, preferring cached credentials in the TokenStore, if possible.
+
+    This is the login path for nearly all user-facing cases.
+    """
+
     master_address = master_address or util.get_default_master_address()
     token_store = TokenStore(master_address)
 
@@ -119,7 +131,7 @@ def authenticate(
         password = getpass.getpass("Password for user '{}': ".format(user))
 
     try:
-        utp = do_login(master_address, user, password, cert)
+        utp = login(master_address, user, password, cert)
         user, token = utp.username, utp.token
     except api.errors.ForbiddenException:
         if fallback_to_default:
@@ -180,6 +192,7 @@ def _is_token_valid(master_address: str, token: str, cert: Optional[certs.Cert])
     Find out whether the given token is valid by attempting to use it
     on the "api/v1/me" endpoint.
     """
+    # XXX broken
     headers = {"Authorization": "Bearer {}".format(token)}
     try:
         r = api.get(master_address, "api/v1/me", headers=headers, authenticated=False, cert=cert)
@@ -406,6 +419,7 @@ def validate_token_store_v1(store: Any) -> bool:
     return True
 
 
+
 # cli_utp is the process-wide UsernameTokenPair used for api calls originating from the cli.
 cli_utp = None  # type: Optional[UsernameTokenPair]
 
@@ -418,7 +432,7 @@ def required(func: Callable[[argparse.Namespace], Any]) -> Callable[..., Any]:
     @functools.wraps(func)
     def f(namespace: argparse.Namespace) -> Any:
         global cli_utp
-        cli_utp = authenticate(namespace.master, namespace.user)
+        cli_utp = login_with_cache(namespace.master, namespace.user)
         return func(namespace)
 
     return f

@@ -150,7 +150,7 @@ Command = namedtuple(
 
 
 def expand_uuid_prefixes(
-    args: Namespace, prefixes: Optional[Union[str, List[str]]] = None
+    sess: api.Session, args: Namespace, prefixes: Optional[Union[str, List[str]]] = None
 ) -> Union[str, List[str]]:
     if prefixes is None:
         prefixes = RemoteTaskGetIDsFunc[args._command](args)  # type: ignore
@@ -168,7 +168,7 @@ def expand_uuid_prefixes(
             )
         api_path = RemoteTaskNewAPIs[args._command]
         api_full_path = "api/v1/{}".format(api_path)
-        res = api.get(args.master, api_full_path).json()[api_path]
+        res = sess.get(api_full_path).json()[api_path]
         all_ids: List[str] = [x["id"] for x in res]
 
         def expand(prefix: str) -> str:
@@ -191,8 +191,8 @@ def expand_uuid_prefixes(
     return prefixes
 
 
-@authentication.required
 def list_tasks(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     api_path = RemoteTaskNewAPIs[args._command]
     api_full_path = "api/v1/{}".format(api_path)
     table_header = RemoteTaskListTableHeaders[args._command]
@@ -200,14 +200,14 @@ def list_tasks(args: Namespace) -> None:
     params: Dict[str, Any] = {}
 
     if "workspace_name" in args and args.workspace_name is not None:
-        workspace = api.workspace_by_name(cli.setup_session(args), args.workspace_name)
+        workspace = api.workspace_by_name(sess, args.workspace_name)
 
         params["workspaceId"] = workspace.id
 
     if not args.all:
         params["users"] = [authentication.must_cli_utp().username]
 
-    res = api.get(args.master, api_full_path, params=params).json()[api_path]
+    res = sess.get(api_full_path, params=params).json()[api_path]
 
     if args.quiet:
         for command in res:
@@ -215,7 +215,7 @@ def list_tasks(args: Namespace) -> None:
         return
 
     # swap workspace_id for workspace name.
-    w_names = cli.workspace.get_workspace_names(cli.setup_session(args))
+    w_names = cli.workspace.get_workspace_names(sess)
 
     for item in res:
         if item["state"].startswith("STATE_"):
@@ -235,8 +235,8 @@ def list_tasks(args: Namespace) -> None:
     render.tabulate_or_csv(table_header, values, getattr(args, "csv", False))
 
 
-@authentication.required
 def kill(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     task_ids = expand_uuid_prefixes(args)
     name = RemoteTaskName[args._command]
 
@@ -252,31 +252,27 @@ def kill(args: Namespace) -> None:
             print(colored("Skipping: {} ({})".format(e, type(e).__name__), "red"))
 
 
-def _kill(master_url: str, taskType: str, taskID: str) -> None:
-    api_full_path = "api/v1/{}/{}/kill".format(RemoteTaskNewAPIs[taskType], taskID)
-    api.post(master_url, api_full_path)
+def _kill(sess: api.Session, taskType: str, taskID: str) -> None:
+    sess.post(f"api/v1/{RemoteTaskNewAPIs[taskType]}/{taskID}/kill")
 
 
-@authentication.required
 def set_priority(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     task_id = expand_uuid_prefixes(args)
     name = RemoteTaskName[args._command]
 
     try:
-        api_full_path = "api/v1/{}/{}/set_priority".format(
-            RemoteTaskNewAPIs[args._command], task_id
-        )
-        api.post(args.master, api_full_path, {"priority": args.priority})
-        print(colored("Set priority of {} {} to {}".format(name, task_id, args.priority), "green"))
+        api_full_path = f"api/v1/{RemoteTaskNewAPIs[args._command]}/{task_id}/set_priority"
+        sess.post(api_full_path, {"priority": args.priority})
+        print(colored(f"Set priority of {name} {task_id} to {args.priority}")
     except api.errors.APIException as e:
-        print(colored("Skipping: {} ({})".format(e, type(e).__name__), "red"))
+        print(colored(f"Skipping: {e} ({type(e).__name__})", "red"))
 
 
-@authentication.required
 def config(args: Namespace) -> None:
-    task_id = expand_uuid_prefixes(args)
-    api_full_path = "api/v1/{}/{}".format(RemoteTaskNewAPIs[args._command], task_id)
-    res_json = api.get(args.master, api_full_path).json()
+    sess = cli.setup_session(args)
+    task_id = expand_uuid_prefixes(sess, args)
+    res_json = sess.get(f"api/v1/{RemoteTaskNewAPIs[args._command]}/{task_id}").json()
     print(render.format_object_as_yaml(res_json["config"]))
 
 
@@ -399,7 +395,7 @@ def parse_config(
 
 
 def launch_command(
-    master: str,
+    sess: api.Session
     endpoint: str,
     config: Dict[str, Any],
     template: str,
@@ -435,8 +431,4 @@ def launch_command(
     if workspace_id is not None:
         body["workspaceId"] = workspace_id
 
-    return api.post(
-        master,
-        endpoint,
-        body,
-    ).json()
+    return sess.post(endpoint, body).json()

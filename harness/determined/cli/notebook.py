@@ -13,8 +13,8 @@ from determined.common.check import check_eq
 from determined.common.declarative_argparse import Arg, Cmd, Group
 
 
-@authentication.required
 def start_notebook(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     config = command.parse_config(args.config_file, None, args.config, args.volume)
 
     files = context.read_v1_context(args.context, args.include)
@@ -28,7 +28,7 @@ def start_notebook(args: Namespace) -> None:
         templateName=args.template,
         workspaceId=workspace_id,
     )
-    resp = bindings.post_LaunchNotebook(cli.setup_session(args), body=body)
+    resp = bindings.post_LaunchNotebook(sess, body=body)
 
     if args.preview:
         print(render.format_object_as_yaml(resp.config))
@@ -48,7 +48,7 @@ def start_notebook(args: Namespace) -> None:
         bindings.v1LaunchWarning.CURRENT_SLOTS_EXCEEDED in resp.warnings
     )
 
-    cli.wait_ntsc_ready(cli.setup_session(args), api.NTSC_Kind.notebook, nb.id)
+    cli.wait_ntsc_ready(sess, api.NTSC_Kind.notebook, nb.id)
 
     assert nb.serviceAddress is not None, "missing tensorboard serviceAddress"
     nb_path = request.make_interactive_task_url(
@@ -65,10 +65,10 @@ def start_notebook(args: Namespace) -> None:
     print(colored("Jupyter Notebook is running at: {}".format(url), "green"))
 
 
-@authentication.required
 def open_notebook(args: Namespace) -> None:
+    sess = args.setup_session(args)
     notebook_id = command.expand_uuid_prefixes(args)
-    resp = api.get(args.master, "api/v1/notebooks/{}".format(notebook_id)).json()["notebook"]
+    resp = sess.get(f"api/v1/notebooks/{notebook_id}").json()["notebook"]
     check_eq(resp["state"], "STATE_RUNNING", "Notebook must be in a running state")
 
     api.browser_open(

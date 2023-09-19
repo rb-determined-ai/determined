@@ -19,6 +19,7 @@ def trigger_preemption(signum: int, frame: types.FrameType) -> None:
         # Chief container, requests preemption, others ignore
         logging.info("SIGTERM: Preemption imminent.")
         # Notify the master that we need to be preempted
+        # XXX
         api.post(
             info.master_url, f"/api/v1/allocations/{info.allocation_id}/signals/pending_preemption"
         )

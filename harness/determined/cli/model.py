@@ -86,6 +86,7 @@ def list_models(args: Namespace) -> None:
 
 
 def model_by_name(args: Namespace) -> Model:
+    # XXX broken
     models = Determined(args.master, args.user).get_models(name=args.name)
     if len(models) == 0:
         raise Exception("No model was found with the given name.")
@@ -94,11 +95,11 @@ def model_by_name(args: Namespace) -> Model:
     return models[0]
 
 
-@authentication.required
 def list_versions(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     model = model_by_name(args)
     if args.json:
-        r = api.get(args.master, "api/v1/models/{}/versions".format(model.model_id))
+        r = sess.get(f"api/v1/models/{model.model_id}/versions")
         data = r.json()
         determined.cli.render.print_json(data)
 
@@ -163,13 +164,12 @@ def describe(args: Namespace) -> None:
             render_model_version(model_version)
 
 
-@authentication.required
 def register_version(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     model = model_by_name(args)
     if args.json:
-        resp = api.post(
-            args.master,
-            "/api/v1/models/{}/versions".format(model.model_id),
+        resp = sess.post(
+            f"/api/v1/models/{model.model_id}/versions",
             json={"checkpointUuid": args.uuid},
         )
 

@@ -62,10 +62,10 @@ def list_agents(args: argparse.Namespace) -> None:
     render.tabulate_or_csv(headers, values, args.csv)
 
 
-@authentication.required
 def list_slots(args: argparse.Namespace) -> None:
-    task_res = api.get(args.master, "tasks")
-    resp = bindings.get_GetAgents(cli.setup_session(args))
+    sess = cli.setup_session(args)
+    task_res = sess.get("tasks")
+    resp = bindings.get_GetAgents(sess)
 
     allocations = task_res.json()
 
@@ -153,8 +153,8 @@ def list_slots(args: argparse.Namespace) -> None:
 
 
 def patch_agent(enabled: bool) -> Callable[[argparse.Namespace], None]:
-    @authentication.required
     def patch(args: argparse.Namespace) -> None:
+        sess = cli.setup_session(args)
         check.check_false(args.all and args.agent_id)
         action = "enable" if enabled else "disable"
 
@@ -181,14 +181,14 @@ def patch_agent(enabled: bool) -> Callable[[argparse.Namespace], None]:
                     "drain": drain_mode,
                 }
 
-            api.post(args.master, path, payload)
+            sess.post(path, payload)
             status = "Disabled" if not enabled else "Enabled"
             print(f"{status} agent {agent_id}.", file=sys.stderr)
 
         # When draining, check if there're any tasks currently running on
         # these slots, and list them.
         if drain_mode:
-            rsp = bindings.get_GetTasks(cli.setup_session(args))
+            rsp = bindings.get_GetTasks(sess)
             tasks_data = {
                 k: t
                 for (k, t) in (

@@ -12,8 +12,8 @@ from determined.common.check import check_eq
 from determined.common.declarative_argparse import Arg, ArgsDescription, Cmd, Group
 
 
-@authentication.required
 def start_tensorboard(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     if not (args.trial_ids or args.experiment_ids):
         raise ArgumentError(None, "Either experiment_ids or trial_ids must be specified.")
 
@@ -29,7 +29,7 @@ def start_tensorboard(args: Namespace) -> None:
         workspaceId=workspace_id,
     )
 
-    resp = bindings.post_LaunchTensorboard(cli.setup_session(args), body=body)
+    resp = bindings.post_LaunchTensorboard(sess, body=body)
     tsb = resp.tensorboard
 
     if args.detach:
@@ -43,7 +43,7 @@ def start_tensorboard(args: Namespace) -> None:
     currentSlotsExceeded = (resp.warnings is not None) and (
         bindings.v1LaunchWarning.CURRENT_SLOTS_EXCEEDED in resp.warnings
     )
-    cli.wait_ntsc_ready(cli.setup_session(args), api.NTSC_Kind.tensorboard, tsb.id)
+    cli.wait_ntsc_ready(sess, api.NTSC_Kind.tensorboard, tsb.id)
 
     assert tsb.serviceAddress is not None, "missing tensorboard serviceAddress"
     nb_path = request.make_interactive_task_url(
@@ -60,12 +60,10 @@ def start_tensorboard(args: Namespace) -> None:
     print(colored("Tensorboard is running at: {}".format(url), "green"))
 
 
-@authentication.required
 def open_tensorboard(args: Namespace) -> None:
+    sess = cli.setup_session(args)
     tensorboard_id = command.expand_uuid_prefixes(args)
-    resp = api.get(args.master, "api/v1/tensorboards/{}".format(tensorboard_id)).json()[
-        "tensorboard"
-    ]
+    resp = sess.get(f"api/v1/tensorboards/{tensorboard_id}").json()["tensorboard"]
     check_eq(resp["state"], "STATE_RUNNING", "TensorBoard must be in a running state")
     api.browser_open(
         args.master,
