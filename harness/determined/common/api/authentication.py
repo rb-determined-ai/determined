@@ -13,6 +13,7 @@ import determined as det
 from determined.common import api, constants, util
 from determined.common.api import bindings, certs
 
+# XXX: delete this!  It's only used in e2e tests
 Credentials = NamedTuple("Credentials", [("username", str), ("password", str)])
 
 PASSWORD_SALT = "GubPEmmotfiK9TMD6Zdw"
