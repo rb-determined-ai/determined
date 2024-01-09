@@ -3,6 +3,7 @@ import os
 from typing import Any, Dict, Iterable, List, Optional, Union
 
 from determined import gpu
+from determined.common import api
 
 DEFAULT_RENDEZVOUS_INFO_PATH = "/run/determined/info/rendezvous.json"
 DEFAULT_TRIAL_INFO_PATH = "/run/determined/info/trial.json"
@@ -209,7 +210,8 @@ class ClusterInfo:
         resources_info: Optional[ResourcesInfo] = None,
     ):
         #: The url for reaching the master.
-        self.master_url = master_url
+        # XXX: should this just be done master-side?
+        self.master_url = api.canonicalize_master_url(master_url)
 
         #: The unique identifier for this cluster.
         self.cluster_id = cluster_id

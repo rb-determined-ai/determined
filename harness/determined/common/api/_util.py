@@ -1,12 +1,12 @@
 import enum
+import os
 from typing import Callable, Iterator, Optional, Tuple, TypeVar, Union
+from urllib import parse
 
 import urllib3
 
 from determined.common import api, util
 from determined.common.api import bindings
-
-# from determined.cli.render import Animator
 
 
 class PageOpts(str, enum.Enum):
@@ -35,6 +35,76 @@ WARNING_MESSAGE_MAP = {
         "You may need to increase cluster resources in order for the job to run."
     )
 }
+
+
+def canonicalize_master_url(url: str) -> str:
+    """
+    Read a user-provided master url and convert it to a canonical master url.
+
+    It is expected that user inputs are canonicalized once right when the user passes them in, and
+    that the master_url remains unchanged throughout the internals of the system.
+
+    A canonical master has the following properties:
+      - explicit scheme
+      - nonempty host
+      - explicit port
+      - path does not end in a '/', if it is present at all
+      - no username, password, query, or fragment
+      - a full url can be trivially formed a la f"{master_url}/path/to/resource"
+
+    In addition to validation, canonicalization is important for the authentication cache, because
+    it helps to prevent situations where a use creates multiple sessions for a single master
+    instance.  It's not bulletproof though, if they do things like connect to the master as both
+    localhost and as 127.0.0.1; we can't help those cases without an inappropriate amount of
+    guesswork.
+    """
+
+    # We need to prepend a scheme first, because urlparse() doesn't handle that case well.
+    if url.startswith("https://"):
+        default_port = 443
+    elif url.startswith("http://"):
+        default_port = 80
+    else:
+        url = f"http://{url}"
+        default_port = 8080
+
+    parsed = parse.urlparse(url)
+
+    if not parsed.hostname:
+        raise ValueError(f"invalid master url {url}; master url must contain a nonempty hostname")
+
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError(
+            f"invalid master url {url}; master url must not contain username, password, query, or "
+            "fragment"
+        )
+
+    port = parsed.port or default_port
+    netloc = f"{parsed.hostname}:{port}"
+    return parse.urlunparse((parsed.scheme, netloc, parsed.path, "", "", "")).rstrip("/")
+
+
+def get_full_url(master_url: str, path: str) -> str:
+    """
+    get_full_url combines a master_url and a path.  It should be
+
+
+    urllib.parse.urljoin() doesn't do the right thing; this does.
+
+    urljoin() is designed to behave like os.path.join(), where if the second parameter is an
+    absolute url, urljoin() just returns the second path and ignores the first.
+
+    We never want that.  We want to combine a master_url, which might be set via DET_MASTER
+    environment variable or passed to the cli via the --master flag, with a particular API path,
+    preserving any path prefix in the master_url.
+
+    Note that master_url must have already been canonicalized.
+    """
+    return master_url + "/" + path.lstrip("/")
+
+
+def get_default_master_url() -> str:
+    return os.environ.get("DET_MASTER", os.environ.get("DET_MASTER_ADDR", "localhost:8080"))
 
 
 def read_paginated(
