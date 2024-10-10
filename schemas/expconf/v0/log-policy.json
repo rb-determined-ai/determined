@@ -13,6 +13,9 @@
                 "string"
             ]
         },
+        "action": {
+            "$ref": "http://determined.ai/schemas/expconf/v0/log-action-old.json"
+        },
         "actions": {
             "type": [
                 "array",
@@ -22,26 +25,23 @@
                 "$ref": "http://determined.ai/schemas/expconf/v0/log-action.json"
             },
             "default": []
-        },
-        "signal": {
-            "type": [
-                "string",
-                "null"
-            ]
         }
     },
     "checks": {
-        "one of or both of actions and signal must be set": {
-            "anyOf": [
+        "detected both the deprecated \"action\" field and the newer \"actions\" field": {
+            "$comment": "user can't provide both action and actions",
+            "oneOf": [
                 {
-                    "required": [
-                        "actions"
-                    ]
+                    "properties": {
+                        "action": true
+                    },
+                    "additionalPropertes": false
                 },
                 {
-                    "required": [
-                        "signal"
-                    ]
+                    "properties": {
+                        "actions": true
+                    },
+                    "additionalPropertes": false
                 }
             ]
         }
