@@ -145,7 +145,7 @@ class DeterminedCallback(callbacks.ProgbarLogger):  # type: ignore
         if training:
             report = (
                 f"total batches trained: {self._steps_completed}, "
-                f"workload {percent}% complete ({batches}/{total})"
+                f"epoch {percent}% complete ({batches}/{total})"
             )
         else:
             report = (
@@ -180,8 +180,6 @@ class DeterminedCallback(callbacks.ProgbarLogger):  # type: ignore
     def on_train_batch_end(self, batch: int, logs: Optional[Dict[str, Any]]) -> None:
         self._steps_completed += 1
 
-        assert logs
-
         # Delete the initial checkpoint files, if we haven't already.
         if self._ckpt_context:
             self._ckpt_context.close()
@@ -190,8 +188,13 @@ class DeterminedCallback(callbacks.ProgbarLogger):  # type: ignore
         if not self._is_chief:
             return
 
+        assert logs
+
         # Report metrics.
-        if isinstance(self._report_period, int) and self._steps_completed % self._report_period:
+        if (
+            isinstance(self._report_period, int)
+            and self._steps_completed % self._report_period == 0
+        ):
             self._core.train.report_metrics("training", self._steps_completed, logs)
 
         # Print progress.
@@ -214,7 +217,7 @@ class DeterminedCallback(callbacks.ProgbarLogger):  # type: ignore
 
         # Report progress.
         if self._is_chief and self.params["epochs"]:
-            self._core.train.report_progress(epoch / self.params["epochs"])
+            self._core.train.report_progress((epoch + 1) / self.params["epochs"])
 
         # Save a checkpoint.
         self._last_train_epoch = epoch
@@ -344,7 +347,7 @@ class DeterminedCallback(callbacks.ProgbarLogger):  # type: ignore
 
             self.model._training_state = WorkerTrainingState()
 
-            # Success! Don't delete the checkpoint until afte the first batch runs though, because
+            # Success! Don't delete the checkpoint until after the first batch runs though, because
             # the checkpoint isn't actually read until then.
             return exit_stack.pop_all()
 

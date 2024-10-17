@@ -15,11 +15,22 @@ C10D_PORT = int(str(os.getenv("C10D_PORT", "29400")))
 logger = logging.getLogger("determined.launch.tensorflow")
 
 
+def create_log_wrapper(rank: int) -> List[str]:
+    return [
+            "python3",
+            "-m",
+            "determined.launch.wrap_rank",
+            str(rank),
+            "--",
+        ]
+
+
 def main(port: int, script: List[str]) -> int:
     info = det.get_cluster_info()
     assert info is not None, "must be run on-cluster"
 
-    env = {**os.environ}
+    chief_ip = info.container_addrs[0]
+    env = {**os.environ, "DET_CHIEF_IP": chief_ip}
 
     if len(info.container_addrs) > 1:
         # Multi-node training means MultiWorkerMirroredStrategy.
@@ -28,13 +39,7 @@ def main(port: int, script: List[str]) -> int:
             "task": {"type": "worker", "index": info.container_rank},
         }
         env["TF_CONFIG"] = json.dumps(tf_config)
-        log_wrapper = [
-            "python3",
-            "-m",
-            "determined.launch.wrap_rank",
-            str(info.container_rank),
-            "--",
-        ]
+        log_wrapper = create_log_wrapper(info.container_rank)
     else:
         # Single-node training means MirroredStrategy or just the default strategy.
         # (no point in prefixing every log line with "rank=0")
