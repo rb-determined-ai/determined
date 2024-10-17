@@ -256,7 +256,7 @@ class DistributedContext:
         if "TF_CONFIG" in os.environ:
             tf_config = json.loads(os.environ["TF_CONFIG"])
             # We only support worker tasks
-            task_type = tf_config["task"]["type"] == "worker"
+            task_type = tf_config["task"]["type"]
             if task_type != "worker":
                 raise RuntimeError(
                     "DistributedContext.from_tf_config() only supports the default strategy, "

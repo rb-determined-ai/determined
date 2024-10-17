@@ -1,6 +1,9 @@
+import json
 import os
 import pathlib
 import re
+import subprocess
+import sys
 from unittest import mock
 from typing import List, Tuple, Any
 
@@ -193,7 +196,7 @@ class DeterminedCallbackForTesting(det.keras.DeterminedCallback):
         self.events.append(("load_model", None))
 
 
-def build_model(run_eagerly=False):
+def build_model(eager=False):
     layer = keras.layers.Dense(
         1, activation=None, use_bias=False, kernel_initializer="zeros", input_shape=(8,)
     )
@@ -201,7 +204,7 @@ def build_model(run_eagerly=False):
     model.compile(
         loss=keras.losses.MeanSquaredError(),
         optimizer=keras.optimizers.SGD(),
-        run_eagerly=run_eagerly,
+        run_eagerly=eager,
     )
     return model
 
@@ -214,6 +217,7 @@ def do_fit(
     continue_id=1,
     checkpoint_epochs=1,
     train_metrics_report_period="epoch",
+    eager=False,
     epochs=2,
     verbose=0,
     set_preempt_on_event=None
@@ -222,7 +226,7 @@ def do_fit(
     y = np.ones((64, 8))
     validation_data = (np.ones((64, 8)), np.ones((64, 8)))
 
-    model = model or build_model()
+    model = model or build_model(eager=eager)
     events = Events()
     core_context, set_preempt = mock_core_context(str(path), events, distributed)
 
@@ -288,12 +292,15 @@ def test_basic_logic(tmp_path: pathlib.Path):
     )
 
 
-def test_save_restore_and_warm_start(tmp_path: pathlib.Path):
+# Pick this test to run eagerly because it both saves and loads checkpoints, which feel like it
+# could matter if run_eagerly was set or not.
+@pytest.mark.parametrize("eager", [False, True])
+def test_save_restore_and_warm_start(tmp_path: pathlib.Path, eager: bool):
     # Train-from-scratch, then check that:
     # - initial weight is 0 (no checkpoint was loaded)
     # - initial epoch is 0 (no training state was loaded)
     # - checkpoint gets saved
-    events = do_fit(tmp_path, checkpoint=None, continue_id=1)
+    events = do_fit(tmp_path, eager=eager, checkpoint=None, continue_id=1)
     data = assert_events_match(
         events,
         "!load_model",
@@ -315,7 +322,7 @@ def test_save_restore_and_warm_start(tmp_path: pathlib.Path):
     # - initial weight is nonzero (checkpoint was loaded)
     # - initial epoch is nonzero (training state was loaded)
     # - steps_completed was properly restored
-    events = do_fit(tmp_path, checkpoint=ckpt, continue_id=1)
+    events = do_fit(tmp_path, eager=eager, checkpoint=ckpt, continue_id=1)
     assert_events_match(
         events,
         "set_status:restoring",
@@ -332,7 +339,7 @@ def test_save_restore_and_warm_start(tmp_path: pathlib.Path):
     # - initial weight is nonzero (no checkpoint was loaded)
     # - initial epoch is zero (no training state was loaded)
     # - steps_completed was properly reset
-    events = do_fit(tmp_path, checkpoint=ckpt, continue_id=2)
+    events = do_fit(tmp_path, eager=eager, checkpoint=ckpt, continue_id=2)
     assert_events_match(
         events,
         "set_status:restoring",
@@ -451,15 +458,103 @@ def test_report_period(tmp_path: pathlib.Path):
     )
 
 
+# Pick this test to run eagerly because multi-gpu training, feel like it might be eager-senstive.
+@pytest.mark.parametrize("eager", [False, True])
+@pytest.mark.parametrize("multinode", [False, True])
 @pytest.mark.skipif(len(tf.config.list_physical_devices("GPU")) < 2, reason="not enough gpus")
 @pytest.mark.gpu_parallel
-# Pick this test to run eagerly because it both saves and loads checkpoints, and it does multi-gpu
-# training, which feel like the things that could cause run_eagerly to matter.
-@pytest.mark.parametrize("run_eagerly", [False, True])
-@pytest.mark.strategy("multinode", [False, True])
-def test_multi_gpu(tmp_path: pathlib.Path, run_eagerly: bool, multinode: bool):
-    if multinode:
-        strategy = tf.distribute.MultiWorkerMirroredStrategy()
-    else:
-        strategy = tf.distribute.MirroredStrategy()
+def test_multi_gpu(tmp_path: pathlib.Path, eager: bool, multinode: bool):
+    """
+    Getting an environment where this test can actually pass can be a real pain.
 
+    If you are running on bare metal or a vm with multiple gpus, you can run the test directly,
+    but you must have your nvidia driver and cuda library installations all squared away.  That is
+    surprisingly difficult to achieve, at least I (rb) couldn't make it work.
+
+    The tedious alternative, but which I find more reliable, is to run it in a docker container
+    that is compatible with your GPU and driver.  I selected an NGC tensorflow image from the NGC
+    image support matrix:
+
+        https://docs.nvidia.com/deeplearning/frameworks/support-matrix/index.html
+
+    Then I built a little dockerfile like this:
+
+        FROM ncr.io/nvidia/tesnroflow:$YOUR_NGC_IMAGE
+        RUN pip install determined pytest && pip uninstall --yes determined
+        ENV PYTHONUNBUFFERED=1
+
+    Then I configured /etc/docker/daemon.json with some common settings to make dtrain happy:
+
+        {
+            "runtimes": {
+                "nvidia": {
+                    "args": [],
+                    "path": "nvidia-container-runtime"
+                }
+            },
+            "default-shm-size": "4G",
+            "default-ulimits": {
+                "memlock": {
+                    "Name": "memlock",
+                    "Hard": -1,
+                    "Soft": -1
+                },
+                "stack": {
+                    "Name": "stack",
+                    "Hard": 67108864,
+                    "Soft": 67108864
+                }
+            }
+        }
+
+    Restarted docker:
+
+        sudo systemctl restart docker
+
+    Then I mounted the entire determined project into a container with that new image:
+
+        cd /path/to/determined
+        docker run -it --rm -v $PWD:$PWD --gpus=all $YOUR_CUSTOM_IMAGE
+
+    And finally, inside the container, I navigate to the harness directory and install determined
+    with the editable setting:
+
+        cd /path/to/determined/harness
+        pip install -e .
+
+    And voila, I can finally run the tests:
+
+        pytest -v -s --tb=native tests/experiment/keras/test_callback.py -k test_multi_gpu
+
+    I can also edit the tests from outside the container and rerun them immediately within the
+    container because I mounted the whole project into the container and used `-e` with the pip
+    install.
+    """
+
+    script = os.path.join(os.path.dirname(__file__), "train.py")
+    cmd = [sys.executable, script, str(tmp_path)]
+    if eager:
+        cmd += ["--eager"]
+    # NCCL can hit failures in this test, so make it easy to debug.
+    env = {**os.environ, "NCCL_DEBUG": "info"}
+    if multinode:
+        tf_config = {
+            "cluster": {"worker": ["localhost:12345", "localhost:12346"]},
+            "task": {"type": "worker", "index": 0},
+        }
+        # Start worker 0.
+        env["TF_CONFIG"] = json.dumps(tf_config)
+        env["CUDA_VISIBLE_DEVICES"] = "0"
+        p1 = subprocess.Popen(cmd, env=env)
+        # Start worker 1.
+        tf_config["task"]["index"] = 1
+        env["TF_CONFIG"] = json.dumps(tf_config)
+        env["CUDA_VISIBLE_DEVICES"] = "1"
+        p2 = subprocess.Popen(cmd, env=env)
+        ret1 = p1.wait()
+        ret2 = p2.wait()
+        assert ret1 == ret2 == 0, (ret1, ret2)
+    else:
+        env.pop("TF_CONFIG", None)
+        env.pop("CUDA_VISIBLE_DEVICES", None)
+        subprocess.run(cmd, check=True)
