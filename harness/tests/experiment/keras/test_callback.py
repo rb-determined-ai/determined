@@ -298,6 +298,7 @@ def check_keras_metrics(metrics: Dict[str, Any]) -> None:
     assert not any(m.startswith("val_") for m in metrics), metrics
 
 
+@pytest.mark.tensorflow
 def test_basic_logic(tmp_path: pathlib.Path) -> None:
     # make sure verbose=1 doesn't puke (though we don't really check the output)
     events = do_fit(tmp_path, verbose=1)
@@ -335,6 +336,7 @@ def test_basic_logic(tmp_path: pathlib.Path) -> None:
 # Pick this test to run eagerly because it both saves and loads checkpoints, which feel like it
 # could matter if run_eagerly was set or not.
 @pytest.mark.parametrize("eager", [False, True])
+@pytest.mark.tensorflow
 def test_save_restore_and_warm_start(tmp_path: pathlib.Path, eager: bool) -> None:
     # Train-from-scratch, then check that:
     # - initial weight is 0 (no checkpoint was loaded)
@@ -390,6 +392,7 @@ def test_save_restore_and_warm_start(tmp_path: pathlib.Path, eager: bool) -> Non
     )
 
 
+@pytest.mark.tensorflow
 def test_checkpoint_epochs(tmp_path: pathlib.Path) -> None:
     # Never checkpoint, except on preemption or completion
     events = do_fit(tmp_path, checkpoint_epochs=0, epochs=4)
@@ -479,6 +482,7 @@ def test_checkpoint_epochs(tmp_path: pathlib.Path) -> None:
     )
 
 
+@pytest.mark.tensorflow
 def test_report_period(tmp_path: pathlib.Path) -> None:
     events = do_fit(tmp_path, train_metrics_report_period=3)
     # There are 8 batches per epoch.
@@ -610,6 +614,7 @@ def test_multi_gpu(tmp_path: pathlib.Path, eager: bool, multinode: bool) -> None
         subprocess.run(cmd, check=True)
 
 
+@pytest.mark.tensorflow
 def test_iris() -> None:
     """
     Make sure the DeterminedCallback-based iris example works.
