@@ -14728,8 +14728,8 @@ class v1SearchRunsResponse(Printable):
         return out
 
 class v1SearchSummary(Printable):
-    """SearchSummary contains the estimated trials and training lengths that a search
-    plans to execute.
+    """SearchSummary contains the estimated trials and training lengths that a
+    search plans to execute.
     """
     trials: "typing.Optional[typing.Sequence[v1TrialSummary]]" = None
 

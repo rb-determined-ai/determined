@@ -1002,8 +1002,8 @@ func (x *TrialSummary) GetUnit() *SearchUnit {
 	return nil
 }
 
-// SearchSummary contains the estimated trials and training lengths that a search
-// plans to execute.
+// SearchSummary contains the estimated trials and training lengths that a
+// search plans to execute.
 type SearchSummary struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

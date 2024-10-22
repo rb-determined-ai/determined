@@ -177,8 +177,8 @@ message TrialSummary {
   SearchUnit unit = 2;
 }
 
-// SearchSummary contains the estimated trials and training lengths that a search
-// plans to execute.
+// SearchSummary contains the estimated trials and training lengths that a
+// search plans to execute.
 message SearchSummary {
   option (grpc.gateway.protoc_gen_swagger.options.openapiv2_schema) = {
     json_schema: { required: [ "config", "runs" ] }
