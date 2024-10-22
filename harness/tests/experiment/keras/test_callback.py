@@ -16,6 +16,7 @@ import determined as det
 import determined.keras
 from determined import core
 from determined.common import storage
+from tests.experiment import utils
 
 
 class Events:
@@ -607,3 +608,11 @@ def test_multi_gpu(tmp_path: pathlib.Path, eager: bool, multinode: bool) -> None
         env.pop("TF_CONFIG", None)
         env.pop("CUDA_VISIBLE_DEVICES", None)
         subprocess.run(cmd, check=True)
+
+
+def test_iris() -> None:
+    """
+    Make sure the DeterminedCallback-based iris example works.
+    """
+    cmd = [sys.executable, utils.cv_examples_path("iris_tf_keras/train.py"), "--epochs", "1"]
+    subprocess.run(cmd, check=True)

@@ -8,6 +8,7 @@ Useful References:
 Based off of: https://medium.com/@nickbortolotti/iris-species-categorization-using-tf-keras-tf-data-
               and-differences-between-eager-mode-on-and-off-9b4693e0b22
 """
+import argparse
 import logging
 from typing import List
 
@@ -64,7 +65,7 @@ def get_test_data():
     return test_features.values, test_labels_categorical
 
 
-def main(core_context, strategy, checkpoint, continue_id, hparams):
+def main(core_context, strategy, checkpoint, continue_id, hparams, epochs):
     # Download train and test data.
     train_x, train_y = get_train_data()
     validation_data = get_test_data()
@@ -107,12 +108,16 @@ def main(core_context, strategy, checkpoint, continue_id, hparams):
         y=train_y,
         batch_size=hparams["global_batch_size"],
         validation_data=validation_data,
-        epochs=100,
+        epochs=epochs,
         callbacks=[det_cb, tb_cb],
     )
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format=det.LOG_FORMAT)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--epochs", type=int, default=100, help="how long to train for")
+    args = parser.parse_args()
 
     info = det.get_cluster_info()
     if info and info.task_type == "TRIAL":
@@ -135,4 +140,4 @@ if __name__ == "__main__":
 
     distributed, strategy = det.core.DistributedContext.from_tf_config()
     with det.core.init(distributed=distributed) as core_context:
-        main(core_context, strategy, checkpoint, continue_id, hparams)
+        main(core_context, strategy, checkpoint, continue_id, hparams, args.epochs)
