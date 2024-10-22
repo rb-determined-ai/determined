@@ -593,8 +593,8 @@ def test_preview_search(tmp_path: pathlib.Path) -> None:
     mock_resp = bindings.v1PreviewHPSearchResponse(
         summary=bindings.v1SearchSummary(
             config=searcher_config,
-            runs=[
-                bindings.v1RunSummary(
+            trials=[
+                bindings.v1TrialSummary(
                     count=max_trials,
                     unit=bindings.v1SearchUnit(maxLength=True),
                 )
@@ -616,9 +616,9 @@ def test_preview_search(tmp_path: pathlib.Path) -> None:
         )
         expected_output = f"""Using search configuration:
 {render.format_object_as_yaml(searcher_config)}
-   Runs | Training Time
---------+---------------------
-     10 | train to completion
+   Trials | Training Time
+----------+---------------------
+       10 | train to completion
 """
         util.check_cli_output(["preview-search", str(conf_path)], expected_output)
 
@@ -648,12 +648,12 @@ def test_preview_search(tmp_path: pathlib.Path) -> None:
     mock_resp = bindings.v1PreviewHPSearchResponse(
         summary=bindings.v1SearchSummary(
             config=searcher_config,
-            runs=[
-                bindings.v1RunSummary(
+            trials=[
+                bindings.v1TrialSummary(
                     count=7,
                     unit=bindings.v1SearchUnit(name="batch", value=200, maxLength=False),
                 ),
-                bindings.v1RunSummary(
+                bindings.v1TrialSummary(
                     count=3,
                     unit=bindings.v1SearchUnit(name="batch", value=1000, maxLength=False),
                 ),
@@ -675,9 +675,9 @@ def test_preview_search(tmp_path: pathlib.Path) -> None:
         )
         expected_output = f"""Using search configuration:
 {render.format_object_as_yaml(searcher_config)}
-   Runs | Training Time
---------+----------------------
-      7 | train for 200 batch
-      3 | train for 1000 batch
+   Trials | Training Time
+----------+----------------------
+        7 | train for 200 batch
+        3 | train for 1000 batch
 """
         util.check_cli_output(["preview-search", str(conf_path)], expected_output)
